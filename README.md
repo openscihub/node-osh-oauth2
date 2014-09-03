@@ -115,14 +115,14 @@ req.user = {
 
 // Scope that is required to access the requested resource. Shows up when a
 // client requests a protected resource.
-req.scope = ['account', 'article'];
+req.scope = 'account';
 
 // In general, the access and refresh tokens show up at the beginning of a
 // resource request and at the end of new token requests.
 req.accessToken = {
   id: '5afef00d',
   expires: new Date(),
-  scope: ['account']
+  scope: ['account', 'article']
 };
 
 req.refreshToken = {
@@ -189,8 +189,7 @@ Standard references:
 
 #### readClientCredentials
 
-- **Flows**
-  - [token](#token-flows)
+Flows: [token](#token-flows)
 
 The result of this middleware should be a `client` object attached to the
 request object that has the following properties.
@@ -221,16 +220,14 @@ Standard references:
 
 #### loadClient
 
-- **Flows**
-  - [token](#token-flows)
+Flows: [token](#token-flows)
 
 Load client information from persistent storage and add it to the `req.client`
 object. The default implementation throws an Error.
 
 #### authenticateClient
 
-- **Flows**
-  - [token](#token-flows)
+Flows: [token](#token-flows)
 
 Given client credentials [read from the request](#readclientcredentials)
 and properties [loaded from persistent storage](#loadclient), authenticate the
@@ -247,8 +244,7 @@ on the `req.client` object:
 
 #### readUserCredentials
 
-- **Flows**
-  - [token/password](#password-flow)
+Flows: [token/password](#password-flow)
 
 Read the resource owner (i.e. user) credentials from the request body and
 set them on a new `req.user` object as:
@@ -262,16 +258,14 @@ Standard references:
 
 #### loadUser
 
-- **Flows**
-  - [token/password](#password-flow)
+Flows: [token/password](#password-flow)
 
 Load user (resource owner) information from persistent storage and add it to
 the `req.user` object. The default implementation throws an Error.
 
 #### authenticateUser
 
-- **Flows**
-  - [token/password](#password-flow)
+Flows: [token/password](#password-flow)
 
 Given user credentials [read from the request](#readusercredentials)
 and properties [loaded from persistent storage](#loaduser), authenticate the
@@ -292,15 +286,13 @@ Standard references:
 
 #### readScope
 
-- **Flows**
-  - [token](#token-flows)
+Flows: [token](#token-flows)
 
 Read the requested scope from the HTTP request.
 
 #### loadRefreshToken
 
-- **Flows**
-  - [token/refresh](#refresh-flow)
+Flows: [token/refresh](#refresh-flow)
 
 ### Flows
 
@@ -324,7 +316,7 @@ therefore omitted from the individual token flow lists):
 ##### Password flow
 
 Support for the [password authorization grant
-type](http://tools.ietf.org/html/rfc6749#section-4.3) is provided when
+type](http://tools.ietf.org/html/rfc6749#section-4.3) is enabled when
 `'password'` is passed to [token()](#oauth2prototypetoken).
 
 - [readClientCredentials](#readclientcredentials)
