@@ -1,28 +1,97 @@
+# OAuth2
 
+A collection of Connect/Express middleware functions and orderings that help
+you implement an OAuth2 server in Node.js. This library was built (amongst the
+others) with extensibility in mind, keeping the developer near those middleware
+`req` and `res` objects that are oh so familiar and warm.
 
 ## Example
 
+A simple and complete, in-memory example.
+
 ```js
 var OAuth2 = require('osh-oauth2');
+var hash = require('bcrypt').hashSync;
+var express = require('express');
 
-var oa = OAuth2({
+// In-memory persistence.
+var accessTokens = {};
+var refreshTokens = {};
+var users = {
+  'tony': {
+    username: 'tony',
+    password: 'hey',
+    password_hash: hash('hey', 8)
+  }
+};
+var clients = {
+  'g00gle': {
+    id: 'g00gle',
+    secret: '!evil',
+    secret_hash: hash('!evil', 8)
+  }
+};
+
+// The minimal configuration.
+var oauth2 = OAuth2({
   saveAccessToken: function(req, res, next) {
-
+    accessTokens[req.accessToken.id] = req.accessToken;
+    next();
   },
   loadAccessToken: function(req, res, next) {
-
+    req.accessToken = accessTokens[req.accessToken.id];
+    next();
+  },
+  saveRefreshToken: function(req, res, next) {
+    refreshTokens[req.refreshToken.id] = req.refreshToken;
+    next();
+  },
+  loadRefreshToken: function(req, res, next) {
+    req.refreshToken = refreshTokens[req.refreshToken.id];
+    next();
+  },
+  loadUser: function(req, res, next) {
+    req.user = users[req.user.username];
+    next();
+  },
+  loadClient: function(req, res, next) {
+    req.client = users[req.user.username];
+    next();
   }
 });
+
+var app = express();
+
+app.post(
+  '/oauth2/token',
+  oauth2.token('password')
+);
+
+app.get(
+  '/user/:username',
+  oauth2.scope('account'),
+  function(req, res) {
+    res.send(users[req.params.username]);
+  }
+);
+
+app.listen(3333);
 ```
 
 ## Documentation
 
 - [Configuration](#configuration)
 - [Methods](#methods)
+  - [generateTokenId()](oauth2generatetokenid)
   - [token()](#oauth2prototypetoken)
   - [scope()](#oauth2prototypescope)
 - [Data structures](#data-structures)
-
+- [Flows](#flows)
+  - [Token flows](#token-flows)
+    - [Code flow](#code-flow)
+    - [Password flow](#password-flow)
+    - [Refresh flow](#refresh-flow)
+  - [Resource flow](#resource-flow)
 
 ### Configuration
 
@@ -36,7 +105,21 @@ wherever the default middleware would have run.
 
 ### Methods
 
-OAuth2 instance methods.
+Non-middleware OAuth2 class/instance methods.
+
+#### OAuth2.generateTokenId
+
+This is used by the default implementations of [newAccessToken](#newaccesstoken)
+and [newRefreshToken](#newrefreshtoken).
+
+Signature
+
+```
+Function(Function(Error err, String id)<> callback)<>
+```
+
+Uses the [crypto](http://nodejs.org/api/crypto.html) library to SHA1 hash
+256 random bytes into a hexadecimal string.
 
 #### OAuth2.prototype.token
 
@@ -55,6 +138,15 @@ where an entry in `flows` is one of:
 - `'client'` (see [client flow](#client-flow))
 - `'code'` (see [code flow](#code-flow))
 - `'implicit'` (see [implicit flow](#implicit-flow))
+
+Example usage:
+
+```js
+app.get(
+  '/oauth2/token',
+  oauth2.token(['password', 'client'])
+);
+```
 
 **NOTICE**: Sorry, only `'password'` is supported right now.
 
@@ -89,14 +181,25 @@ app.get(
 
 ### Data structures
 
-The following data structures are used by this middleware by default. If
-you want to change the names of any properties, you'll have to [add some
+The following data structures are used by the OAuth2 default middleware stack.
+If you want to change the names of any properties, you'll have to [add some
 custom middleware](#configuration) in the appropriate places.
 
 In the samples below, `req` refers to the usual request object found in
 Connect and Express middleware.
 
 ```js
+// OAuth2 sets this only if it does not exist already.
+req.began = new Date();
+
+// Options for customizing subsequent default middleware behavior.
+req.oauth2 = {
+  accessToken: {
+    expiresIn: 3600,
+    type: 'bearer'
+  }
+};
+
 // Information on clients that access resources on the user's behalf. This
 // object is almost always present throughout and after the various oauth2
 // flows.
@@ -133,13 +236,13 @@ req.refreshToken = {
 
 ### Middleware
 
-The following is the collection of middleware expected by
-osh-oauth2. An incarnation of each exists as a static method on the
-class returned by this module and acts as the default for that
-method on an OAuth2 instance. Emphasized names *require* custom
-implementations, usually because they depend on some kind of persistent
-storage mechanism.
+The following is the collection of middleware expected by osh-oauth2. An
+incarnation of each exists as a static method on the class returned by this
+module and acts as the default for that method on an OAuth2 instance.
+Emphasized names *require* custom implementations, usually because they depend
+on some kind of persistent storage mechanism.
 
+- [setOptions](#setoptions)
 - [attachErrorHandler](#attacherrorhandler)
 - [validateTokenRequest](#validatetokenrequest)
 - [readClientCredentials](#readclientcredentials)
@@ -147,6 +250,58 @@ storage mechanism.
 - [authenticateClient](#authenticateclient)
 - [readUserCredentials](#readusercredentials)
 - [**loadUser**](#loaduser)
+- [authenticateUser](#authenticateuser)
+- [readScope](#readscope)
+- [newAccessToken](#newaccesstoken)
+- [**saveAccessToken**](#saveaccesstoken)
+- [**loadAccessToken**](#loadaccesstoken)
+- [newRefreshToken](#newrefreshtoken)
+- [**saveRefreshToken**](#saverefreshtoken)
+- [**loadRefreshToken**](#loadrefreshtoken)
+
+#### setOptions
+
+Middleware for customizing subsequent default middleware behavior
+(e.g. the lifetime of new access tokens generated by the default
+implementation of [newAccessToken](#newaccesstoken)).
+
+Shown below are the options recognized by later default middleware
+and their default values.
+
+```js
+req.oauth2 = {
+
+  // Options for default access token creation (see newAccessToken
+  // middleware).
+  accessToken: {
+
+    // Lifetime to set on all new access tokens.
+    expiresIn: 3600,
+
+    // The token type. Just leave this as 'bearer'
+    type: 'bearer'
+  }
+};
+```
+
+A common way of modifying setOptions is to override its default behavior,
+which involves:
+
+```js
+var oauth2 = OAuth2({
+  setOptions: [
+    OAuth2.setOptions,
+    function(req, res, next) {
+      req.oauth2.accessToken.expiresIn = 200;
+      // override other req.oauth2 options...
+      next();
+    }
+  ]
+});
+```
+
+Notice that, with this technique, one can set options *per request*.
+
 
 #### attachErrorHandler
 
@@ -229,8 +384,8 @@ object. The default implementation throws an Error.
 
 Flows: [token](#token-flows)
 
-Given client credentials [read from the request](#readclientcredentials)
-and properties [loaded from persistent storage](#loadclient), authenticate the
+Given client credentials from [readClientCredentials](#readclientcredentials)
+and client properties from [loadClient](#loadclient), authenticate the
 client. That is, check that the secret given in the request matches the (hashed!)
 secret stored by the backend.
 
@@ -244,7 +399,7 @@ on the `req.client` object:
 
 #### readUserCredentials
 
-Flows: [token/password](#password-flow)
+Flows: [password](#password-flow)
 
 Read the resource owner (i.e. user) credentials from the request body and
 set them on a new `req.user` object as:
@@ -258,14 +413,14 @@ Standard references:
 
 #### loadUser
 
-Flows: [token/password](#password-flow)
+Flows: [password](#password-flow)
 
 Load user (resource owner) information from persistent storage and add it to
 the `req.user` object. The default implementation throws an Error.
 
 #### authenticateUser
 
-Flows: [token/password](#password-flow)
+Flows: [password](#password-flow)
 
 Given user credentials [read from the request](#readusercredentials)
 and properties [loaded from persistent storage](#loaduser), authenticate the
@@ -288,11 +443,17 @@ Standard references:
 
 Flows: [token](#token-flows)
 
-Read the requested scope from the HTTP request.
+Read the requested scope from the HTTP request for an access token.
+
+Standard references:
+
+- http://tools.ietf.org/html/rfc6749#section-3.3
+- http://tools.ietf.org/html/rfc6749#section-4.1.1 (code flow)
+- 
 
 #### loadRefreshToken
 
-Flows: [token/refresh](#refresh-flow)
+Flows: [refresh](#refresh-flow)
 
 ### Flows
 
@@ -310,8 +471,14 @@ These are the flows for requesting an access token.
 All of the following flows are preceded by these steps (which are
 therefore omitted from the individual token flow lists):
 
-- [attachErrorHandler](#attacherrorhandler)
-- [validateTokenRequest](#validatetokenrequest)
+1. [attachErrorHandler](#attacherrorhandler)
+2. [validateTokenRequest](#validatetokenrequest)
+
+##### Code flow
+
+Standard references:
+
+- http://tools.ietf.org/html/rfc6749#section-4.1
 
 ##### Password flow
 
@@ -319,11 +486,16 @@ Support for the [password authorization grant
 type](http://tools.ietf.org/html/rfc6749#section-4.3) is enabled when
 `'password'` is passed to [token()](#oauth2prototypetoken).
 
-- [readClientCredentials](#readclientcredentials)
-- [**loadClient**](#loadclient)
-- [authenticateClient](#authenticateclient)
-- [readUserCredentials](#readusercredentials)
-- [**loadUser**](#loaduser)
+3. [readClientCredentials](#readclientcredentials)
+4. [**loadClient**](#loadclient)
+5. [authenticateClient](#authenticateclient)
+6. [readUserCredentials](#readusercredentials)
+7. [**loadUser**](#loaduser)
+8. [authenticateUser](#authenticateuser)
+
+Standard references:
+
+- http://tools.ietf.org/html/rfc6749#section-4.3
 
 ##### Refresh flow
 

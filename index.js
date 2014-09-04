@@ -5,6 +5,7 @@ var bcrypt = require('bcrypt');
 var async = require('async');
 var extend = require('xtend/mutable');
 
+
 function implement(method) {
   return function(req, res, next) {
     next(
@@ -15,39 +16,31 @@ function implement(method) {
 
 
 
-  /**
-   *  Grant an access token to a client.
-   *
-   *  The following route has a series of middlewares; each
-   *  represents a step in the process of issuing an access token.
-   *  You can find documentation for each step just before the
-   *  middleware function.
-   *
-   */
-
-
 
 var OAuth2 = Class(function(opts) {
-  this._tokenFlow = [];
-  OAuth2.TOKEN_FLOW.forEach(function(action) {
-    this._tokenFlow.push(
-      action in opts ?
-      opts[action] :
-      OAuth2[action]
-    );
-  }.bind(this));
-  this._authFlow = [];
-  OAuth2.AUTH_FLOW.forEach(function(action) {
-    this._authFlow.push(
-      action in opts ?
-      opts[action] :
-      OAuth2[action]
-    );
-  }.bind(this));
+  this._tokenFlow = flow(OAuth2.TOKEN_FLOW);
+  this._resourceFlow = flow(OAuth2.AUTH_FLOW);
+
+  function flow(actions) {
+    var _flow = [];
+    actions.forEach(function(action) {
+      action = (
+        action in opts ?
+        opts[action] :
+        OAuth2[action]
+      );
+      if (Array.isArray(action)) {
+        _flow = _flow.concat(action);
+      }
+      else _flow.push(action);
+    });
+    return _flow;
+  }
 });
 
 
 OAuth2.TOKEN_FLOW = [
+  'setOptions',
   'attachErrorHandler',
   'validateTokenRequest',
   'readClientCredentials',
@@ -80,6 +73,19 @@ OAuth2.AUTH_FLOW = [
 
 
 extend(OAuth2, {
+  setOptions: function(req, res, next) {
+    req.began = req.began || new Date();
+    req.oauth2 = {
+      accessToken: {
+        expiresIn: 3600,
+        type: 'bearer'
+      },
+      refreshToken: {
+        expiresIn: 3600
+      }
+    };
+    next();
+  },
 
   // Register error handler on request object.
   attachErrorHandler: function(req, res, next) {
@@ -112,7 +118,6 @@ extend(OAuth2, {
       next();
     }
   },
-
 
   readClientCredentials: function(req, res, next) {
     // Get client credentials from HTTP basic authentication.
@@ -203,7 +208,7 @@ extend(OAuth2, {
   },
 
   newAccessToken: function(req, res, next) {
-    generateTokenId(function(err, id) {
+    OAuth2.generateTokenId(function(err, id) {
       if (err) next(err);
       else {
         var expiresIn = 3600;
@@ -223,7 +228,7 @@ extend(OAuth2, {
   },
 
   newRefreshToken: function(req, res, next) {
-    generateTokenId(function(err, id) {
+    OAuth2.generateTokenId(function(err, id) {
       if (err) next(err);
       else {
         var expiresIn = 3600;
@@ -284,32 +289,58 @@ extend(OAuth2, {
 
   loadAccessToken: implement('loadAccessToken'),
 
-  checkExpiration: function(req, res, next) {
+  checkAccessExpiration: function(req, res, next) {
     if (req.accessToken.expires < req.began) {
       res.send(401, 'Access token has expired');
     }
     else next();
+  },
+
+  checkRefreshExpiration: function(req, res, next) {
+    if (req.accessToken.expires < req.began) {
+      res.send(401, 'Access token has expired');
+    }
+    else next();
+  },
+
+  generateTokenId: function(callback) {
+    crypto.randomBytes(256, function(ex, buffer) {
+      if (ex) {
+        return callback(new Error(
+          'Error generating random bytes for access token'
+        ));
+      }
+      callback(null,
+        crypto.createHash('sha1')
+        .update(buffer)
+        .digest('hex')
+      );
+    });
   }
 
 });
 
 
-function generateTokenId(callback) {
-  crypto.randomBytes(256, function(ex, buffer) {
-    if (ex) {
-      return callback(new Error(
-        'Error generating random bytes for access token'
-      ));
-    }
-    callback(null,
-      crypto.createHash('sha1')
-      .update(buffer)
-      .digest('hex')
+/**
+ *  Create a single middleware function that runs a series of other
+ *  middleware functions.
+ */
+
+function runner(middlewares) {
+  return function(req, res, next) {
+    series(
+      middlewares.map(function(middleware) {
+        return middleware.bind(null, req, res);
+      }),
+      next
     );
-  });
+  };
 }
 
 
+OAuth2.prototype.token = function(flows) {
+  return runner(this._tokenFlow);
+};
 
 /**
  *  Authorize resource requests.
@@ -333,19 +364,12 @@ function generateTokenId(callback) {
  */
 
 OAuth2.prototype.scope = function(scope) {
-  var actions = this._scope.concat(
+  var actions = this._resourceFlow.concat(
     'string' == typeof scope ?
     checkScope : scope
   );
 
-  return function(req, res, next) {
-    series(
-      actions.map(function(action) {
-        return action.bind(null, req, res);
-      }),
-      next
-    );
-  };
+  return runner(actions);
 
   // A scope possessed by the access token must match
   function checkScope(req, res, next) {
@@ -364,117 +388,7 @@ OAuth2.prototype.scope = function(scope) {
 };
 
 
-  app.scope = function(scope) {
-    /**
-     *  Steps required before the authorization of a resource request.  These
-     *  include parsing the access token from the request header, loading the
-     *  access token attributes (scope, resource owner, expires, ...) from the
-     *  database, and checking its expiration date.
-     */
-    var steps = [
-      getBearerAccessToken,
-      findAccessToken,
-      checkAccessToken,
-      authorize
-    ];
-
-    return function(req, res, next) {
-      run(steps, req, res, next);
-    }
-
-    // A scope possessed by the access token must match
-    function authorize(req, res, next) {
-      for (var i = 0; i < req.scope.length; i++) {
-        if (req.scope[i] === scope) {
-          return next();
-        }
-      }
-      res.send(401,
-        'Access denied. Token has scope: [' +
-        req.scope.join(', ') + '], but resource requires scope: ' +
-        scope
-      );
-    }
-  };
-
-  /**
-   * Get bearer token from request header. It must exist.
-   * 
-   *
-   * Extract token from request according to RFC6750
-   *
-   * @param  {Function} done
-   * @this   OAuth
-   */
-
-  function getBearerAccessToken(req, res, next) {
-    var header = req.get('Authorization');
-    
-    // Header: http://tools.ietf.org/html/rfc6750#section-2.1
-    if (header) {
-      var matches = header.match(/Bearer\s(\S+)/);
-      if (!matches) {
-        return res.send(401, 'Malformed auth header');
-      }
-      req.accessToken = {id: matches[1]};
-      next();
-    } else {
-      res.send(401, 'Nonexistent auth header');
-    }
-  }
-
-  function findAccessToken(req, res, next) {
-    OAuth2AccessTokens.select(
-      {
-        where: 'id = ?',
-        values: [req.accessToken.id],
-        one: true
-      },
-      function(err, accessToken) {
-        if (err) next(err);
-        else if (!accessToken) {
-          res.send(401, 'Invalid access token');
-        }
-        else {
-          req.accessToken = {
-            id: accessToken.id,
-            expires: accessToken.expires
-          };
-          req.scope = accessToken.scope.split(' ');
-          req.granter = {
-            username: accessToken.username,
-            realname: accessToken.realname
-          };
-          req.client = {
-            id: accessToken.client_id
-          };
-          next();
-        }
-      }
-    );
-  }
-
-  function checkAccessToken(req, res, next) {
-    if (req.accessToken.expires < req.began) {
-      res.send(401, 'Access token has expired');
-    }
-    else next();
-  }
 
 
 
-  function run(middlewares, req, res, next) {
-    (function _run(pos) {
-      middlewares[pos](req, res, function(err) {
-        if (err || ++pos === middlewares.length) {
-          next(err);
-        } else {
-          _run(pos);
-        }
-      });
-    })(0);
-  }
-
-  process.nextTick(done);
-};
 
