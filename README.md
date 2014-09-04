@@ -449,7 +449,29 @@ Standard references:
 
 - http://tools.ietf.org/html/rfc6749#section-3.3
 - http://tools.ietf.org/html/rfc6749#section-4.1.1 (code flow)
-- 
+
+#### newAccessToken
+
+This is called at the end of a successful access token request via any
+grant type (i.e. token flow) and should attach an `accessToken` object
+to the `res` middleware object. The default implementation uses the
+[generateTokenId](#oauth2generatetokenid) function to create the id
+and then uses the `req.oauth2.accessToken` configuration options to fill
+in the remaining properties, which should include:
+
+- `type {String}`: see `token_type` in the standard. 
+- `expiresIn {Number}`: see `expires_in` in the standard.
+
+Standard references:
+
+- http://tools.ietf.org/html/rfc6749#section-4.1.4 (code flow)
+- http://tools.ietf.org/html/rfc6749#section-4.2.2 (implicit flow)
+- http://tools.ietf.org/html/rfc6749#section-4.3.3 (password flow)
+- http://tools.ietf.org/html/rfc6749#section-4.4.3 (client flow)
+
+#### setScope
+
+
 
 #### loadRefreshToken
 
@@ -471,8 +493,9 @@ These are the flows for requesting an access token.
 All of the following flows are preceded by these steps (which are
 therefore omitted from the individual token flow lists):
 
-1. [attachErrorHandler](#attacherrorhandler)
-2. [validateTokenRequest](#validatetokenrequest)
+1. [setOptions](#setoptions)
+2. [attachErrorHandler](#attacherrorhandler)
+3. [validateTokenRequest](#validatetokenrequest)
 
 ##### Code flow
 
@@ -486,12 +509,14 @@ Support for the [password authorization grant
 type](http://tools.ietf.org/html/rfc6749#section-4.3) is enabled when
 `'password'` is passed to [token()](#oauth2prototypetoken).
 
-3. [readClientCredentials](#readclientcredentials)
-4. [**loadClient**](#loadclient)
-5. [authenticateClient](#authenticateclient)
-6. [readUserCredentials](#readusercredentials)
-7. [**loadUser**](#loaduser)
-8. [authenticateUser](#authenticateuser)
+4. [readClientCredentials](#readclientcredentials)
+5. [**loadClient**](#loadclient)
+6. [authenticateClient](#authenticateclient)
+7. [readUserCredentials](#readusercredentials)
+8. [**loadUser**](#loaduser)
+9. [authenticateUser](#authenticateuser)
+10. [newAccessToken](#newaccesstoken)
+11. [newRefreshToken](#newrefreshtoken)
 
 Standard references:
 
