@@ -503,29 +503,17 @@ found in [validateTokenRequest](#validatetokenrequest):
 - [&#8592;](#validateclienttokenrequest) [Client token flow](#client-token-flow) [&#8594;](#userfromclient)
 - [&#8592;](#validatecodetokenrequest) [Code token flow](#code-token-flow) [&#8594;](#loadclient)
 
-Flows: [token](#token-flows)
+The result of this middleware should be the following properties attached
+to the request object.
 
-The result of this middleware should be a `client` object attached to the
-request object that has the following properties.
-
-- `id {String}`:
-- `secret {String}`:
+- `req.client_id`:
+- `req.client_secret`:
 
 The default implementation uses the
 [basic-auth](https://github.com/jshttp/node-basic-auth) module to get this
-information from the Authorization header.
-
-Subsequent middleware should be able to access the client credentials like:
-
-```js
-function middleware(req, res, next) {
-  var client = Clients.find(req.client.id);
-  if (client.secret !== req.client.secret) {
-    next(new Error);
-  }
-  else next();
-}
-```
+information from the Authorization header. The standard says you can get it
+from the request body, but with discouragement. Therefore, the default
+implementation ignores client creds in the body.
 
 Standard references:
 
@@ -538,17 +526,13 @@ Standard references:
 - [&#8592;](#readclientcredentials) [Code token flow](#code-token-flow) [&#8594;](#authenticateclient)
 - [Code authorization](#code-authorization) [&#8594;](#validateredirecturi)
 
-Flows: [token](#token-flows)
-
-Load client information from persistent storage and add it to the `req.client`
+Load client information from persistent storage and set it as the `req.client`
 object. The default implementation throws an Error.
 
 #### authenticateClient
 
 - [&#8592;](#loadclient) [Password token flow](#password-token-flow) [&#8594;](#allowclientpasswordtoken)
 - [&#8592;](#loadclient) [Code token flow](#code-token-flow) [&#8594;](#readauthorizationcode)
-
-Flows: [token](#token-flows)
 
 Given client credentials from [readClientCredentials](#readclientcredentials)
 and client properties from [loadClient](#loadclient), authenticate the
@@ -560,7 +544,7 @@ on the `req.client` object:
 
 - `secret {String}`: See [readClientCredentials](#readclientcredentials).
 - `secret_hash {String}`: This is a hash that is assumed to have been produced
-  by passing `req.client.secret` through
+  by passing `req.client_secret` through
   [bcrypt.hash](https://github.com/ncb000gt/node.bcrypt.js).
 
 #### readUserCredentials
@@ -568,13 +552,11 @@ on the `req.client` object:
 - [&#8592;](#allowclientpasswordtoken) [Password token flow](#password-token-flow) [&#8594;](#loaduser)
 - [Decision flow](#decision-flow) [&#8594;](#loaduser)
 
-Flows: [password](#password-flow)
-
 Read the resource owner (i.e. user) credentials from the request body and
-set them on a new `req.user` object as:
+set them on the request object as:
 
-- `username {String}`: See [the standard](http://tools.ietf.org/html/rfc6749#section-4.3.2).
-- `password {String}`: See [the standard](http://tools.ietf.org/html/rfc6749#section-4.3.2).
+- `req.username {String}`: See [the standard](http://tools.ietf.org/html/rfc6749#section-4.3.2).
+- `req.password {String}`: See [the standard](http://tools.ietf.org/html/rfc6749#section-4.3.2).
 
 Standard references:
 
