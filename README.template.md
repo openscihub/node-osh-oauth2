@@ -209,7 +209,7 @@ this library, "flow" means any ordered set of calls to recognized middleware
 (or named steps); for example, this includes the "flow" involved in authorizing
 a client access to a resource.
 
-#### Authorization flows
+#### FLOWS.AUTH
 
 These are flows behind the authorization endpoint.
 
@@ -223,20 +223,19 @@ The authorization process requires:
 - [validateAuthRequest](#validateauthrequest)
 - [branchAuthRequest](#branchauthrequest)
 
-##### Code authorization
+##### FLOWS.CODE_AUTH
 
-- [loadClient](#loadclient)
-- [validateRedirectUri](#validateredirecturi)
+{FLOWS.CODE_AUTH}
 
 Standard references:
 
 - http://tools.ietf.org/html/rfc6749#section-4.1
 
-##### Decision flow
+##### FLOWS.DECISION
 
-##### Implicit authorization
+##### FLOWS.IMPLICIT
 
-#### Token flows
+#### FLOWS.TOKEN
 
 These are the flows for requesting an access token.
 
@@ -247,63 +246,30 @@ therefore omitted from the individual token flow lists):
 2. [attachErrorHandler](#attacherrorhandler)
 3. [validateTokenRequest](#validatetokenrequest)
 
-##### Client token flow
+##### FLOWS.CLIENT_TOKEN
 
-- [validateClientTokenRequest](#validateclienttokenrequest)
-- [readClientCredentials](#readclientcredentials)
-- [userFromClient](#userfromclient)
-- [loadUser](#loaduser)
-- [authenticateUser](#authenticateuser)
-- [readScope](#readscope)
-- [newAccessToken](#newaccesstoken)
-- [saveAccessToken](#saveaccesstoken)
-- [sendToken](#sendtoken)
+{FLOWS.CLIENT_TOKEN}
 
 Standard references:
 
-- http://tools.ietf.org/html/rfc6749#section-4.4
+- oauth2#4.4
 
-##### Code token flow
+##### FLOWS.CODE_TOKEN
 
-- [validateCodeTokenRequest](#validatecodetokenrequest)
-- [readClientCredentials](#readclientcredentials)
-- [loadClient](#loadclient)
-- [authenticateClient](#authenticateclient)
-- [readAuthorizationCode](#readauthorizationcode)
-- [loadAuthorizationCode](#loadauthorizationcode)
-- [validateRedirectUri](#validateredirecturi)
-- [scopeFromCode](#scopefromcode)
-- [newAccessToken](#newaccesstoken)
-- [newRefreshToken](#newrefreshtoken)
-- [saveAccessToken](#saveaccesstoken)
-- [saveRefreshToken](#saverefreshtoken)
-- [sendToken](#sendtoken)
+{FLOWS.CODE_TOKEN}
 
 Standard references:
 
-- http://tools.ietf.org/html/rfc6749#section-4.1.3
+- oauth2#4.1.3
 
-##### Password token flow
+##### FLOWS.PASSWORD_TOKEN
 
 
 Support for the [password authorization grant
 type](http://tools.ietf.org/html/rfc6749#section-4.3) is enabled when
 `'password'` is passed to [token()](#oauth2prototypetoken).
 
-- [validatePasswordTokenRequest](#validatepasswordtokenrequest)
-- [readClientCredentials](#readclientcredentials)
-- [loadClient](#loadclient)
-- [authenticateClient](#authenticateclient)
-- [allowClientPasswordToken](#allowclientpasswordtoken)
-- [readUserCredentials](#readusercredentials)
-- [loadUser](#loaduser)
-- [authenticateUser](#authenticateuser)
-- [readScope](#readscope)
-- [newAccessToken](#newaccesstoken)
-- [newRefreshToken](#newrefreshtoken)
-- [saveAccessToken](#saveaccesstoken)
-- [saveRefreshToken](#saverefreshtoken)
-- [sendToken](#sendtoken)
+{FLOWS.PASSWORD_TOKEN}
 
 Standard references:
 
@@ -342,9 +308,6 @@ on some kind of persistent storage mechanism.
 - [**loadRefreshToken**](#loadrefreshtoken)
 
 #### init
-
-- [Token flows](#token-flows) [&#8594;](#validatetokenrequest)
-- [Authorization flows](#authorization-flows) [&#8594;](#validateauthrequest)
 
 Initializes some OAuth2-specific properties on the request and response
 objects.
@@ -428,8 +391,6 @@ Standard references:
 
 #### validateAuthRequest
 
-- [&#8592;](#init) [Authorization flows](#authorization-flows) [&#8594;](#branchauthrequest)
-
 This middleware runs through the query parameters that are expected on an
 authorization GET request. These are:
 
@@ -444,13 +405,11 @@ same identifier (e.g. `req.response_type`) for later use.
 
 Standard references
 
-- http://tools.ietf.org/html/rfc6749#section-4.1.1
-- http://tools.ietf.org/html/rfc6749#section-4.2.1
+- oauth2#4.1.1
+- oauth2#4.2.1
 
 
 #### branchAuthRequest
-
-- [&#8592;](#validateauthrequest) [Authorization flows](#authorization-flows) 
 
 | prev | flow | next |
 |------|------|------|
@@ -470,8 +429,6 @@ subflow depending on its value.
 
 #### validateTokenRequest
 
-- [&#8592;](#init) [Token flows](#token-flows) [&#8594;](#branchtokenrequest)
-
 Validate various aspects of a token request. The default implementation
 checks that the request type is `application/x-www-form-urlencoded`, and
 that the `grant_type` parameter is present in the request body. If validation
@@ -488,44 +445,26 @@ Standard references:
 
 #### branchTokenRequest
 
-- [&#8592;](#validatetokenrequest) [Token flows](#token-flows) 
-
 Switches to one of the following flows depending on the `req.grant_type`
 found in [validateTokenRequest](#validatetokenrequest):
 
-- [Password token flow](password-token-flow)
-- [Client token flow](client-token-flow)
-- [Code token flow](code-token-flow)
+- FLOWS.PASSWORD_TOKEN
+- FLOWS.CLIENT_TOKEN
+- FLOWS.CODE_TOKEN
 
 #### readClientCredentials
 
-- [&#8592;](#validatepasswordtokenrequest) [Password token flow](#password-token-flow) [&#8594;](#loadclient)
-- [&#8592;](#validateclienttokenrequest) [Client token flow](#client-token-flow) [&#8594;](#userfromclient)
-- [&#8592;](#validatecodetokenrequest) [Code token flow](#code-token-flow) [&#8594;](#loadclient)
+The result of this middleware should be the following properties attached
+to the request object.
 
-Flows: [token](#token-flows)
-
-The result of this middleware should be a `client` object attached to the
-request object that has the following properties.
-
-- `id {String}`:
-- `secret {String}`:
+- `req.client_id`:
+- `req.client_secret`:
 
 The default implementation uses the
 [basic-auth](https://github.com/jshttp/node-basic-auth) module to get this
-information from the Authorization header.
-
-Subsequent middleware should be able to access the client credentials like:
-
-```js
-function middleware(req, res, next) {
-  var client = Clients.find(req.client.id);
-  if (client.secret !== req.client.secret) {
-    next(new Error);
-  }
-  else next();
-}
-```
+information from the Authorization header. The standard says you can get it
+from the request body, but with discouragement. Therefore, the default
+implementation ignores client creds in the body.
 
 Standard references:
 
@@ -534,21 +473,10 @@ Standard references:
 
 #### loadClient
 
-- [&#8592;](#readclientcredentials) [Password token flow](#password-token-flow) [&#8594;](#authenticateclient)
-- [&#8592;](#readclientcredentials) [Code token flow](#code-token-flow) [&#8594;](#authenticateclient)
-- [Code authorization](#code-authorization) [&#8594;](#validateredirecturi)
-
-Flows: [token](#token-flows)
-
-Load client information from persistent storage and add it to the `req.client`
+Load client information from persistent storage and set it as the `req.client`
 object. The default implementation throws an Error.
 
 #### authenticateClient
-
-- [&#8592;](#loadclient) [Password token flow](#password-token-flow) [&#8594;](#allowclientpasswordtoken)
-- [&#8592;](#loadclient) [Code token flow](#code-token-flow) [&#8594;](#readauthorizationcode)
-
-Flows: [token](#token-flows)
 
 Given client credentials from [readClientCredentials](#readclientcredentials)
 and client properties from [loadClient](#loadclient), authenticate the
@@ -560,21 +488,16 @@ on the `req.client` object:
 
 - `secret {String}`: See [readClientCredentials](#readclientcredentials).
 - `secret_hash {String}`: This is a hash that is assumed to have been produced
-  by passing `req.client.secret` through
+  by passing `req.client_secret` through
   [bcrypt.hash](https://github.com/ncb000gt/node.bcrypt.js).
 
 #### readUserCredentials
 
-- [&#8592;](#allowclientpasswordtoken) [Password token flow](#password-token-flow) [&#8594;](#loaduser)
-- [Decision flow](#decision-flow) [&#8594;](#loaduser)
-
-Flows: [password](#password-flow)
-
 Read the resource owner (i.e. user) credentials from the request body and
-set them on a new `req.user` object as:
+set them on the request object as:
 
-- `username {String}`: See [the standard](http://tools.ietf.org/html/rfc6749#section-4.3.2).
-- `password {String}`: See [the standard](http://tools.ietf.org/html/rfc6749#section-4.3.2).
+- `req.username {String}`: See [the standard](oauth2#4.3.2).
+- `req.password {String}`: See [the standard](oauth2#4.3.2).
 
 Standard references:
 
@@ -582,20 +505,12 @@ Standard references:
 
 #### loadUser
 
-- [&#8592;](#readusercredentials) [Password token flow](#password-token-flow) [&#8594;](#authenticateuser)
-- [&#8592;](#userfromclient) [Client token flow](#client-token-flow) [&#8594;](#authenticateuser)
-- [&#8592;](#readusercredentials) [Decision flow](#decision-flow) [&#8594;](#authenticateuser)
-
 Flows: [password](#password-flow)
 
 Load user (resource owner) information from persistent storage and add it to
 the `req.user` object. The default implementation throws an Error.
 
 #### authenticateUser
-
-- [&#8592;](#loaduser) [Password token flow](#password-token-flow) [&#8594;](#readscope)
-- [&#8592;](#loaduser) [Client token flow](#client-token-flow) [&#8594;](#readscope)
-- [&#8592;](#loaduser) [Decision flow](#decision-flow) [&#8594;](#newauthorizationcode)
 
 Flows: [password](#password-flow)
 
@@ -618,9 +533,6 @@ Standard references:
 
 #### readScope
 
-- [&#8592;](#authenticateuser) [Password token flow](#password-token-flow) [&#8594;](#newaccesstoken)
-- [&#8592;](#authenticateuser) [Client token flow](#client-token-flow) [&#8594;](#newaccesstoken)
-
 Flows: [token](#token-flows)
 
 Read the requested scope from the HTTP request for an access token.
@@ -631,10 +543,6 @@ Standard references:
 - http://tools.ietf.org/html/rfc6749#section-4.1.1 (code flow)
 
 #### newAccessToken
-
-- [&#8592;](#readscope) [Password token flow](#password-token-flow) [&#8594;](#newrefreshtoken)
-- [&#8592;](#readscope) [Client token flow](#client-token-flow) [&#8594;](#saveaccesstoken)
-- [&#8592;](#scopefromcode) [Code token flow](#code-token-flow) [&#8594;](#newrefreshtoken)
 
 This is called at the end of a successful access token request via any
 grant type (i.e. token flow) and should attach an `accessToken` object

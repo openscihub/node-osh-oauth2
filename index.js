@@ -1,48 +1,111 @@
 var crypto = require('crypto');
 var auth = require('basic-auth');
-var log = require('../util/logger')('OAuth2 Token');
+var log = require('osh-util/logger')('OAuth2');
 var bcrypt = require('bcrypt');
-var async = require('async');
 var extend = require('xtend/mutable');
+var merge = require('xtend/immutable');
+var Class = require('osh-class');
+var series = require('osh-util/series');
+var parseForm = require('body-parser').urlencoded({extended: false});
 
+function error(msg) {
+  return new Error('OSH OAuth2: ' + msg);
+}
 
 function implement(method) {
   return function(req, res, next) {
     next(
-      new Error('OSH OAuth2: must implement ' + method)
+      error('must implement ' + method)
     );
   };
 }
 
 
 
-
 var OAuth2 = Class(function(opts) {
-  this._tokenFlow = flow(OAuth2.TOKEN_FLOW);
-  this._resourceFlow = flow(OAuth2.AUTH_FLOW);
+  this.oauth2 = extend(
+    {
+      expires_in: 3600,
+      token_type: 'bearer'
+    },
+    opts
+  );
+});
 
-  function flow(actions) {
-    var _flow = [];
-    actions.forEach(function(action) {
+/**
+ *  Make a flow given an array of strings or functions.
+ *
+ *  Make a flow. This places a middleware at the beginning of the
+ *  given stack that attaches this OAuth2 instance to the request
+ *  object as req.oauth2.
+ *
+ *  @param {String|Array<String|Function>} actions
+ */
+
+OAuth2.prototype.flow = function(actions) {
+  actions = (
+    'string' == typeof actions ?
+    OAuth2.FLOWS[actions] : actions
+  );
+
+  var oauth2 = this;
+  var flow = [];
+
+  actions.forEach(function(action) {
+    if ('function' == typeof action) flow.push(action);
+    else {
       action = (
-        action in opts ?
-        opts[action] :
+        oauth2.opts[action] ||
+        oauth2[action] ||
         OAuth2[action]
       );
-      if (Array.isArray(action)) {
-        _flow = _flow.concat(action);
+
+      if (!action) {
+        throw new Error(
+          'Need action ' + action + ' for flow.'
+        );
       }
-      else _flow.push(action);
-    });
-    return _flow;
-  }
-});
+      else if (Array.isArray(action)) {
+        flow = flow.concat(action);
+      }
+      else flow.push(action);
+    }
+  });
+
+  return flow;
+};
+
+
+/**
+ *  Mapping between grant_type and token flow id for the token endpoint.
+ */
+
+OAuth2.TOKEN_FLOWS = {
+  'authorization_code': 'code',
+  'password': 'password',
+  'client_credentials': 'client'
+};
+
+/**
+ *  Mapping between response_type and auth flow id for the authorization
+ *  endpoint.
+ */
+
+OAuth2.AUTH_FLOWS = {
+  'authorization_code': OAuth2.TOKEN_FLOWS['authorization_code'],
+  'token': 'implicit'
+};
+
+/**
+ *  The ordered array of callbacks for the token endpoint.
+ */
 
 
 OAuth2.TOKEN_FLOW = [
   'setOptions',
   'attachErrorHandler',
   'validateTokenRequest',
+  'readGrantType',
   'readClientCredentials',
   'loadClient',
   'authenticateClient',
@@ -56,6 +119,115 @@ OAuth2.TOKEN_FLOW = [
   'saveRefreshToken',
   'sendToken'
 ];
+
+OAuth2.BASE_TOKEN_FLOW = [
+  'setOptions',
+  'attachErrorHandler',
+  'validateTokenRequest'
+];
+
+OAuth2.FLOWS = {
+  TOKEN: [
+    'init',
+    'validateTokenRequest',
+    'branchTokenRequest'
+  ],
+
+
+  /**
+   *  For requesting an access token via resource owner password.
+   *  
+   */
+
+  PASSWORD_TOKEN: [
+    'validatePasswordTokenRequest',
+    'readClientCredentials',
+    'loadClient',
+    'authenticateClient',
+    'allowClientPasswordToken',
+    'readUserCredentials',
+    'loadUser',
+    'authenticateUser',
+    'readScope',
+    'newAccessToken',
+    'newRefreshToken',
+    'saveAccessToken',
+    'saveRefreshToken',
+    'sendToken'
+  ],
+
+  /**
+   *  For requesting an access token where the client is the
+   *  resource owner. This is a flow
+   */
+
+  CLIENT_TOKEN: [
+    'validateClientTokenRequest',
+    'readClientCredentials',
+    'userFromClient',
+    'loadUser',
+    'authenticateUser',
+    'readScope',
+    'newAccessToken',
+    'saveAccessToken',
+    'sendToken'
+  ],
+
+  CODE_TOKEN: [
+    'validateCodeTokenRequest',
+    'readClientCredentials',
+    'loadClient',
+    'authenticateClient',
+    'readAuthorizationCode',
+    'loadAuthorizationCode',
+    'validateRedirectUri',
+    'scopeFromCode',
+    'newAccessToken',
+    'newRefreshToken',
+    'saveAccessToken',
+    'saveRefreshToken',
+    'sendToken'
+  ],
+
+  AUTH: [
+    'init',
+    'validateAuthRequest',
+    'branchAuthRequest'
+  ],
+
+  /**
+   *  This is a data endpoint. No form is rendered. It exchanges a well-formed
+   *  authorization request (all query parameters exist and redirect_uri
+   *  matches that registered by client) for a 200 OK response or a 4xx
+   *  response if the validation fails.  This middleware can be used behind the
+   *  scenes when rendering server-side, or can be queried using AJAX from the
+   *  user-agent before presenting the resource owner with an authorization
+   *  form.
+   */
+
+  CODE_AUTH: [
+    'loadClient',
+    'validateRedirectUri'
+  ],
+
+  /**
+   *  From the authorization form, a decision is sent here.
+   */
+
+  DECISION: [
+    'readUserCredentials',
+    'loadUser',
+    'authenticateUser',
+    'newAuthorizationCode',
+    'saveAuthorizationCode',
+    'redirect'
+  ],
+
+  IMPLICIT: [
+    'validateRedirectUri'
+  ]
+};
+
 
 
 /**
@@ -73,85 +245,203 @@ OAuth2.AUTH_FLOW = [
 
 
 extend(OAuth2, {
-  setOptions: function(req, res, next) {
+  init: function(req, res, next) {
     req.began = req.began || new Date();
-    req.oauth2 = {
-      accessToken: {
-        expiresIn: 3600,
-        type: 'bearer'
-      },
-      refreshToken: {
-        expiresIn: 3600
-      }
-    };
+    res.oauth2Error = function(code, desc, uri) {
+      res.status(400);
+      res.send({
+        error: code || 'invalid_request',
+        error_description: desc || '',
+        error_uri: uri || ''
+      });
+    }
+    log('Error handler registered');
     next();
   },
 
-  // Register error handler on request object.
-  attachErrorHandler: function(req, res, next) {
-    log('Error handler registered');
-    res.oAuth2Error = function(code, desc) {
-      res.send(400, {
-        error: code,
-        error_description: desc
-      });
+  AUTH_QUERY_PARAMS: {
+    response_type: {
+      required: true
+    },
+    client_id: {
+      required: true
+    },
+    redirect_uri: {
+      required: false
+    },
+    scope: {
+      required: false
+    },
+    state: {
+      required: false
+    }
+  },
+
+  validateAuthRequest: function(req, res, next) {
+    var param;
+    for (var name in OAuth2.AUTH_QUERY_PARAMS) {
+      param = OAuth2.AUTH_QUERY_PARAMS[name];
+      if (!req.query[name] && param.required) {
+        return res.oauth2Error(
+          'invalid_request',
+          'Authorization request is missing the ' + name +
+          ' parameter'
+        );
+      }
+      req[name] = req.query[name];
     }
     next();
   },
 
+  branchAuthRequest: function(req, res, next) {
+    var flow;
+    var flows = req.oauth2.flows;
+    switch (req.response_type) {
+      case 'code':
+        flow = flows.code;
+        break;
+      case 'token':
+        flow = flows.implicit;
+        break;
+    }
+    if (!flow) {
+      res.oauth2Error(
+        'unsupported_response_type'
+      );
+    }
+    else OAuth2.runFlow(flow, req, res, next);
+  },
+
+  validateRedirectUri: function(req, res, next) {
+    if (req.redirect_uri !== req.client.redirect_uri) {
+      res.oauth2Error(
+        'invalid_request',
+        'Mismatching redirect_uri'
+      );
+    }
+    else next();
+  },
+
+  TOKEN_GRANT_TYPE_PARAMS: {
+    authorization_code: {
+      code: {required: true},
+      redirect_uri: {required: false},
+      client_id: {required: false}
+    },
+    password: {
+      username: {required: true},
+      password: {required: true},
+      scope: {required: false}
+    },
+    client_credentials: {
+      scope: {required: false}
+    }
+  },
+
+
   validateTokenRequest: function(req, res, next) {
-    if (!req.is('application/x-www-form-urlencoded')) {
-      res.oAuth2Error(
+    if (!req.is('application/x-www-form-urlencoded') || req.method !== 'POST') {
+      return res.oauth2Error(
         'invalid_request',
         'You must POST a request with content-type: ' +
         'application/x-www-form-urlencoded'
       );
     }
-    else if (!req.body.grant_type) {
-      return res.send(400, {
-        error: 'invalid_request',
-        error_description: 'Need to provide a grant_type'
+    if (!req.body) {
+      parseForm(req, res, function(err) {
+        if (err) next(err);
+        else finish();
       });
     }
-    else {
-      log('Request is well-formed.');
+    else finish();
+
+    function finish() {
+      if (!req.body.grant_type) {
+        return res.oauth2Error(
+          'invalid_request',
+          'Need to provide a grant_type'
+        );
+      }
+      req.grant_type = req.body.grant_type;
+      var params = OAuth2.TOKEN_GRANT_TYPE_PARAMS[req.grant_type];
+      if (!params) {
+        return res.oauth2Error(
+          'invalid_grant',
+          'Unknown grant type'
+        );
+      }
+      var param;
+      for (var name in params) {
+        param = params[name];
+        if (!req.body[name] && param.required) {
+          return res.oauth2Error(
+            'invalid_request',
+            'Token request with grant_type "' + req.grant_type + 
+            '" is missing the ' + name + ' parameter.'
+          );
+        }
+        req[name] = req.body[name];
+      }
       next();
     }
+  },
+
+  TOKEN_GRANT_TYPE_FLOWS: {
+    authorization_code: 'code',
+    password: 'password',
+    client_credentials: 'client'
+  },
+
+  branchTokenRequest: function(req, res, next) {
+    var id = OAuth2.TOKEN_GRANT_TYPE_FLOWS[req.grant_type];
+    var flow = req.oauth2.flows[id];
+    if (!flow) {
+      res.oauth2Error(
+        'unsupported_grant_type'
+      );
+    }
+    else OAuth2.runFlow(flow, req, res, next);
   },
 
   readClientCredentials: function(req, res, next) {
     // Get client credentials from HTTP basic authentication.
     var creds = auth(req);
-
     if (!creds) {
-      return res.oAuth2Error(
+      return res.oauth2Error(
         'invalid_client',
         'Need HTTP basic auth credentials for client'
       );
     }
-
     // Return client in RFC6749 terminology.
     req.client = {
       id: creds.name,
       secret: creds.pass
     };
-
-    log('oauth client is:', req.client.id);
+    log('Load client', req.client.id);
     next();
   },
 
   loadClient: implement('loadClient()'),
 
   authenticateClient: function(req, res, next) {
+    log('Authenticate client', req.client.id);
     var client = req.client;
+    if (!client || !client.secret || !client.secret_hash) {
+      return next(
+        error(
+          'Default client authentication. Missing req.client, ' +
+          'req.client.secret, or req.client.secret_hash. Perhaps ' +
+          'your loadClient() implementation did not set these?'
+        )
+      );
+    }
     bcrypt.compare(
       client.secret,
       client.secret_hash,
       function(err, success) {
-        if (success) {
-          next();
-        } else {
-          res.oAuth2Error(
+        if (success) next();
+        else {
+          res.oauth2Error(
             'invalid_client',
             'Invalid secret for client ' + req.client.id
           );
@@ -160,37 +450,64 @@ extend(OAuth2, {
     );
   },
 
-  readUserCredentials: function(req, res, next) {
-    log('password flow');
+  /**
+   *  Used in password token flow and auth code decision flow. This should
+   *  try to get the
+   *
+   */
 
+  readUserCredentials: function(req, res, next) {
+    log('Read user credentials');
     req.user = {
       username: req.body.username,
       password: req.body.password
     };
+    log('Load user', req.user.username);
+    next();
+  },
 
+  userFromClient: function(req, res, next) {
+    log('Set user credentials from client credentials');
+    req.user = {
+      username: req.client.id,
+      password: req.client.secret
+    };
     next();
   },
 
   loadUser: implement('loadUser'),
 
   authenticateUser: function(req, res, next) {
+    log('Authenticate user', req.user.username);
     var user = req.user;
-    bcrypt.compare(user.password, user.pwhash, function(err, success) {
-      if (err) {
-        next(err);
-      } else if (success) {
-        next();
-      } else {
-        res.oAuth2Error(
-          'invalid_grant',
-          'Bad password for ' + user.username
-        );
+    if (!user || !user.password || !user.password_hash) {
+      return next(
+        error(
+          'Default user authentication. Missing req.user, ' +
+          'req.user.password, or req.user.password_hash. Perhaps ' +
+          'your loadUser() implementation did not set these?'
+        )
+      );
+    }
+    bcrypt.compare(
+      user.password,
+      user.password_hash,
+      function(err, success) {
+        if (err) next(err);
+        else if (success) next();
+        else {
+          res.oauth2Error(
+            'invalid_grant',
+            'Bad password for ' + user.username
+          );
+        }
       }
-    });
+    );
   },
 
   readScope: function(req, res, next) {
-    req.scope = (req.body.scope || 'public').split(' ');
+    req.scope = (req.body.scope || req.query.scope || '').split(' ');
+    log('Requested scope:', req.scope.join(' '));
     next();
   },
 
@@ -198,7 +515,7 @@ extend(OAuth2, {
 
   checkRefreshToken: function(req, res, next) {
     if (req.refreshToken.expires < req.began) {
-      res.oAuth2Error(
+      res.oauth2Error(
         'invalid_grant',
         'The refresh token has expired'
       );
@@ -215,11 +532,12 @@ extend(OAuth2, {
         var expires = new Date(req.began);
         expires.setSeconds(expires.getSeconds() + expiresIn);
 
-        req.accessToken = {
+        res.accessToken = {
           id: id,
           expiresIn: expiresIn,
           expires: expires,
-          type: 'bearer'
+          type: 'bearer',
+          scope: req.scope
         };
 
         next();
@@ -235,7 +553,7 @@ extend(OAuth2, {
         var expires = new Date(req.began);
         expires.setSeconds(expires.getSeconds() + expiresIn);
 
-        req.refreshToken = {
+        res.refreshToken = {
           id: id,
           expires: expires
         };
@@ -245,19 +563,22 @@ extend(OAuth2, {
     });
   },
 
-
   saveAccessToken: implement('saveAccessToken'),
 
   saveRefreshToken: implement('saveRefreshToken'),
 
   sendToken: function(req, res, next) {
-    res.send({
-      scope: req.scope.join(' '),
-      access_token: req.accessToken.id,
-      refresh_token: req.refreshToken.id,
-      expires_in: req.accessToken.expiresIn,
-      token_type: req.accessToken.type
-    });
+    var body = {
+      scope: res.accessToken.scope.join(' '),
+      access_token: res.accessToken.id,
+      expires_in: res.accessToken.expiresIn,
+      token_type: res.accessToken.type
+    };
+    if (res.refreshToken) {
+      body.refresh_token = res.refreshToken.id;
+    }
+    res.status(200);
+    res.send(body);
   },
 
 
@@ -283,7 +604,8 @@ extend(OAuth2, {
       req.accessToken = {id: matches[1]};
       next();
     } else {
-      res.send(401, 'Nonexistent auth header');
+      res.status(401);
+      res.send('Nonexistent auth header');
     }
   },
 
@@ -303,6 +625,10 @@ extend(OAuth2, {
     else next();
   },
 
+  /**
+   *  Static utility functions used by default middleware.
+   */
+
   generateTokenId: function(callback) {
     crypto.randomBytes(256, function(ex, buffer) {
       if (ex) {
@@ -316,31 +642,38 @@ extend(OAuth2, {
         .digest('hex')
       );
     });
+  },
+
+  runFlow: function(flow, req, res, next) {
+    series(
+      flow.map(function(middleware) {
+        return middleware.bind(null, req, res);
+      }),
+      next
+    );
   }
 
 });
 
 
-/**
- *  Create a single middleware function that runs a series of other
- *  middleware functions.
- */
-
-function runner(middlewares) {
-  return function(req, res, next) {
-    series(
-      middlewares.map(function(middleware) {
-        return middleware.bind(null, req, res);
-      }),
-      next
-    );
-  };
-}
-
 
 OAuth2.prototype.token = function(flows) {
-  return runner(this._tokenFlow);
+  var flow = [attach].concat(this.flow('TOKEN'));
+  var oauth2 = merge(this.oauth2, {
+    flows: {
+      password: this.flow('PASSWORD_TOKEN'),
+      implicit: this.flow('CLIENT_TOKEN')
+    }
+  });
+
+  return flow;
+
+  function attach(req, res, next) {
+    req.oauth2 = oauth2;
+    next();
+  }
 };
+
 
 /**
  *  Authorize resource requests.
@@ -364,12 +697,10 @@ OAuth2.prototype.token = function(flows) {
  */
 
 OAuth2.prototype.scope = function(scope) {
-  var actions = this._resourceFlow.concat(
+  return this.flow('SCOPE').concat(
     'string' == typeof scope ?
     checkScope : scope
   );
-
-  return runner(actions);
 
   // A scope possessed by the access token must match
   function checkScope(req, res, next) {
@@ -388,7 +719,27 @@ OAuth2.prototype.scope = function(scope) {
 };
 
 
+OAuth2.prototype.authorize = function() {
+  var flow = [attach].concat(this.flow('AUTH'));
+  var oauth2 = merge(this.oauth2, {
+    flows: {
+      code: this.flow('CODE_AUTH'),
+      implicit: this.flow('IMPLICIT_AUTH')
+    }
+  });
+
+  return flow;
+
+  function attach(req, res, next) {
+    req.oauth2 = oauth2;
+    next();
+  }
+};
 
 
+OAuth2.prototype.decision = function() {
+
+};
 
 
+module.exports = OAuth2;
