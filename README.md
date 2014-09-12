@@ -254,7 +254,6 @@ therefore omitted from the individual token flow lists):
 - [userFromClient](#userfromclient)
 - [loadUser](#loaduser)
 - [authenticateUser](#authenticateuser)
-- [readScope](#readscope)
 - [newAccessToken](#newaccesstoken)
 - [saveAccessToken](#saveaccesstoken)
 - [sendToken](#sendtoken)
@@ -298,7 +297,6 @@ type](http://tools.ietf.org/html/rfc6749#section-4.3) is enabled when
 - [readUserCredentials](#readusercredentials)
 - [loadUser](#loaduser)
 - [authenticateUser](#authenticateuser)
-- [readScope](#readscope)
 - [newAccessToken](#newaccesstoken)
 - [newRefreshToken](#newrefreshtoken)
 - [saveAccessToken](#saveaccesstoken)
@@ -493,9 +491,9 @@ Standard references:
 Switches to one of the following flows depending on the `req.grant_type`
 found in [validateTokenRequest](#validatetokenrequest):
 
-- [Password token flow](password-token-flow)
-- [Client token flow](client-token-flow)
-- [Code token flow](code-token-flow)
+- [Password token flow](#password-token-flow)
+- [Client token flow](#client-token-flow)
+- [Code token flow](#code-token-flow)
 
 #### readClientCredentials
 
@@ -575,8 +573,8 @@ the `req.user` object. The default implementation throws an Error.
 
 #### authenticateUser
 
-- [&#8592;](#loaduser) [Password token flow](#password-token-flow) [&#8594;](#readscope)
-- [&#8592;](#loaduser) [Client token flow](#client-token-flow) [&#8594;](#readscope)
+- [&#8592;](#loaduser) [Password token flow](#password-token-flow) [&#8594;](#newaccesstoken)
+- [&#8592;](#loaduser) [Client token flow](#client-token-flow) [&#8594;](#newaccesstoken)
 - [&#8592;](#loaduser) [Decision flow](#decision-flow) [&#8594;](#newauthorizationcode)
 
 Flows: [password](#password-flow)
@@ -600,9 +598,6 @@ Standard references:
 
 #### readScope
 
-- [&#8592;](#authenticateuser) [Password token flow](#password-token-flow) [&#8594;](#newaccesstoken)
-- [&#8592;](#authenticateuser) [Client token flow](#client-token-flow) [&#8594;](#newaccesstoken)
-
 Flows: [token](#token-flows)
 
 Read the requested scope from the HTTP request for an access token.
@@ -614,8 +609,8 @@ Standard references:
 
 #### newAccessToken
 
-- [&#8592;](#readscope) [Password token flow](#password-token-flow) [&#8594;](#newrefreshtoken)
-- [&#8592;](#readscope) [Client token flow](#client-token-flow) [&#8594;](#saveaccesstoken)
+- [&#8592;](#authenticateuser) [Password token flow](#password-token-flow) [&#8594;](#newrefreshtoken)
+- [&#8592;](#authenticateuser) [Client token flow](#client-token-flow) [&#8594;](#saveaccesstoken)
 - [&#8592;](#scopefromcode) [Code token flow](#code-token-flow) [&#8594;](#newrefreshtoken)
 
 This is called at the end of a successful access token request via any

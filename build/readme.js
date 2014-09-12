@@ -27,7 +27,8 @@ var flowNames = {
   CODE_TOKEN: 'Code token flow',
   IMPLICIT: 'Implicit authorization',
   CODE_AUTH: 'Code authorization',
-  DECISION: 'Decision flow'
+  DECISION: 'Decision flow',
+  SCOPE: 'Resource flow'
 };
 var flowId;
 var fns = {};
@@ -77,7 +78,7 @@ for (flowId in OAuth2.FLOWS) {
     new RegExp('FLOWS\.' + flowId, 'g'),
     function() {
       return (
-        '[' + flowName + '](' +
+        '[' + flowName + '](#' +
         flowName.toLowerCase().replace(/ /g, '-') +
         ')'
       );
@@ -93,7 +94,7 @@ for (flowId in OAuth2.FLOWS) {
 //  }
 //
 for (flowId in OAuth2.FLOWS) {
-  console.log(flowId);
+  //console.log(flowId);
   OAuth2.FLOWS[flowId].forEach(function(fnName, index) {
     fn = fns[fnName] || {};
     fn[flowId] = index;
@@ -101,7 +102,7 @@ for (flowId in OAuth2.FLOWS) {
   });
 }
 
-console.log(JSON.stringify(fns, null, 2));
+//console.log(JSON.stringify(fns, null, 2));
 
 // Add flow navigation to each middleware description.
 for (fnName in fns) {

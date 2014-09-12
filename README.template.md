@@ -5,9 +5,104 @@ you implement an OAuth2 server in Node.js. This library was built (amongst the
 others) with extensibility in mind, keeping the developer near those middleware
 `req` and `res` objects that are oh so familiar and warm.
 
+
+There are API components
+
+The authorization code endpoint implements the standard by talking to the
+API server.
+
+- A client redirects a user to your authorization form, say `GET /authorize`
+  on your *html server*.
+- `GET /authorize` looks for the user credentials in the form of a session
+  cookie.
+- If the cookie is present, the current access token for the user is
+  loaded from the session store.
+- `GET /authorize` forwards the request (and the access token) to, say,
+  `GET /api/authorize` on the *API server*, where OAuth2 is configured.
+- `GET /api/authorize` validates the request (checks `redirect_uri`
+  against `client_id` and so forth) and sends a JSON response indicating
+  success, failure, and where to direct the response (either to the user
+  or the initiating client).
+- `GET /api/authorize` also checks for an access token; if the token has
+  authorization scope, the resource owner for the token is returned in the
+  JSON response (this is an indication to the requester that the given
+  access token will allow the authorization when POST'd; keep reading).
+- `GET /authorize` receives word from `GET /api/authorize` and either redirects
+  the user back to the client with an error or sends an authorization form to
+  the user (possibly with an error msg telling the user a client is trying
+  to bamboozle them).
+- The authorization form can take two courses of action: it can send the
+  user's decision back to `POST /authorize`, or `POST /api/authorize` via
+  an AJAX request.
+- If authorization requires user authentication (i.e. the user is
+  not logged in), they can do so via AJAX to `POST /api/token` using
+  the `client_credentials` grant type. Alternatively, they can
+  `POST /authorize` with user credentials in the form, and the html
+  server will obtain an authorization access token behind the scenes
+  using the `client_credentials` grant type.
+- `POST /api/authorize` *requires* an access token with authorization scope.
+
+
+But wait, a client could work around the `/authorize` endpoint and do
+something nasty with user credentials at the `/api/authorize` endpoint.
+Not really, because the client can never see the user's access token.
+The access token is held on the html server and possibly in the user's
+browser (in local storage, which is only accessible by javascript run
+on pages served by the html server).
+
+If a client gets a hold of an access token with authorization scope, it can
+bypass explicit user authorization by using only the `POST /api/authorize`
+endpoint. A client possessing an access token with authorization scope is
+tantamount to the client knowing a user's password.
+
+The client *could* request authorization scope from a user, though, through
+`GET /authorize`. Users should be informed that this is a very dangerous
+scope to authorize, because it enables the client to allow access to any
+other client.
+
+For this reason, OAuth2 (by default) allows authorization scope through only
+the `client_credentials` grant type, where the client *is* the resource
+owner.
+
+
+
 ## Example
 
 A simple and complete, in-memory example.
+
+API:
+
+```js
+var api = express();
+
+var oauth2 = OAuth2({
+
+});
+
+api.post(
+  '/token'
+
+```
+
+Website
+
+```js
+var site = express();
+
+var oauth2 = OAuth2.Authorize({
+
+});
+
+
+site.use(
+  '/authorize',
+  OAuth2.Authorize({
+    token: 'localhost:3333/token'
+  })
+);
+
+```
+
 
 ```js
 var OAuth2 = require('osh-oauth2');
@@ -82,7 +177,7 @@ app.listen(3333);
 
 - [Configuration](#configuration)
 - [Methods](#methods)
-  - [generateTokenId()](oauth2generatetokenid)
+  - [generateToken()](oauth2generatetoken)
   - [token()](#oauth2prototypetoken)
   - [scope()](#oauth2prototypescope)
 - [Flows](#flows)
@@ -127,7 +222,7 @@ are:
 
 Non-middleware OAuth2 class/instance methods.
 
-#### OAuth2.generateTokenId
+#### OAuth2.generateToken
 
 This is used by the default implementations of [newAccessToken](#newaccesstoken)
 and [newRefreshToken](#newrefreshtoken).
@@ -140,6 +235,35 @@ Function(Function(Error err, String id)<> callback)<>
 
 Uses the [crypto](http://nodejs.org/api/crypto.html) library to SHA1 hash
 256 random bytes into a hexadecimal string.
+
+#### OAuth2.validateSecret
+
+This is set to
+[`bcrypt.compare`](https://github.com/ncb000gt/node.bcrypt.js#async-recommended)
+which has the signature,
+
+```
+Function(String secret, String hash, Function callback)
+```
+
+
+#### OAuth2.hashSecret
+
+Used in the signup/join and register client flows.
+
+This is set to
+[`bcrypt.hash`](https://github.com/ncb000gt/node.bcrypt.js#async-recommended),
+with the signature,
+
+```
+Function(String secret, Integer|String salt, Function callback)
+```
+
+Usage of this function by default middleware sets the salt with an Integer,
+which indicates the number of rounds bcrypt should use to auto-generate a
+salt. This integer can be changed on the OAuth2 options object, under
+`opts.bcryptRounds`.
+
 
 #### OAuth2.prototype.token
 
@@ -452,6 +576,14 @@ found in [validateTokenRequest](#validatetokenrequest):
 - FLOWS.CLIENT_TOKEN
 - FLOWS.CODE_TOKEN
 
+#### loadAuthorizationCode
+
+Given `req.code` sent in the authorization code token request, load the
+following from persistent storage:
+
+- `req.scope`: The scope that was requested from the authorization endpoint.
+- `req.expires`: The expiration date of the authorization code.
+
 #### readClientCredentials
 
 The result of this middleware should be the following properties attached
@@ -544,18 +676,19 @@ Standard references:
 
 #### newAccessToken
 
-This is called at the end of a successful access token request via any
-grant type (i.e. token flow) and should attach an `accessToken` object
-to the `res` middleware object. The default implementation uses the
-[generateTokenId](#oauth2generatetokenid) function to create the id
-and then uses the `req.oauth2.accessToken` configuration options to fill
-in the remaining properties, which should include:
+This is called at the end of a successful access token request via any grant
+type (i.e. token flow) and should attach a `token` object to `res` (the
+response object) with the following minimum set of properties:
 
-- `id {String}`: The token. See `access_token` in the standard.
-- `type {String}`: The token type; usually `'bearer'`. See `token_type`
-  in the standard. 
-- `expiresIn {Number}`: Number of seconds until access token expires.
-  See `expires_in` in the standard.
+- `access_token {String}`
+- `token_type {String}`
+- `expires_in {Integer}`
+- `refresh_token {String}`
+- `expires {Date}`
+
+The default implementation uses the [generateToken](#oauth2generatetoken)
+function to create `access_token` and then uses the `req.oauth2.opts`
+configuration options to fill in the remaining properties.
 
 Standard references:
 
