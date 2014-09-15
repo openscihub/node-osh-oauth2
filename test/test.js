@@ -15,18 +15,22 @@ var refreshTokens = {};
 var authorizationCodes = {};
 var users = {
   'tony': {
-    username: 'tony',
-    password_hash: hash('hey', 8)
+    id: 'tony',
+    realname: 'Tony'
   }
 };
 var clients = {
   'g00gle': {
-    client_id: 'g00gle',
-    client_secret_hash: hash('!evil', 8),
+    id: 'g00gle',
+    secret_hash: hash('!evil', 8),
     redirect_uri: 'https://g00gle.com/callback'
   },
+  'tony': {
+    id: 'tony',
+    secret_hash: hash('hey', 8)
+  },
   'public': {
-    client_id: 'public'
+    id: 'public'
   }
 };
 
@@ -38,6 +42,10 @@ function Model(store) {
     },
     load: function(id, done) {
       done(null, store[id]);
+    },
+    del: function(id, done) {
+      delete store[id];
+      done();
     }
   };
 }
@@ -55,7 +63,11 @@ AuthorizationCode.lifetime = 600;
 // }
 
 var AccessToken = Model(accessTokens);
+AccessToken.lifetime = 3600;
+AccessToken.allowRefresh = false;
+
 var RefreshToken = Model(refreshTokens);
+var User = Model(users);
 
 
 function clearTokens() {
@@ -73,8 +85,8 @@ function pass(req, res, next) {
 describe('osh-oauth2', function() {
   describe('code authorization', function() {
     var oauth2 = OAuth2({
-      grants: ['authorization_code'],
-      Client: Client,
+      debug: true,
+      Client: merge(Client, {grants: ['authorization_code']}),
       AuthorizationCode: AuthorizationCode
     });
 
@@ -85,7 +97,7 @@ describe('osh-oauth2', function() {
     );
     var request = supertest(app);
 
-    describe.only('request', function() {
+    describe('request', function() {
       it('should validate', function(done) {
         request.get('/authorize')
         .query({
@@ -94,7 +106,7 @@ describe('osh-oauth2', function() {
           redirect_uri: 'https://g00gle.com/callback'
         })
         .expect(200)
-        .expect(/user/i, done);
+        .expect(/"user":null/i, done);
       });
 
       it('should 400 with mismatching redirect_uri', function(done) {
@@ -104,7 +116,7 @@ describe('osh-oauth2', function() {
           client_id: 'g00gle',
           redirect_uri: 'https://g00gle.com/callbark'
         })
-        .expect(400, /mismatch/, done);
+        .expect(400, /invalid redirect_uri/i, done);
       });
 
       it('should 400 with missing client_id', function(done) {
@@ -113,20 +125,116 @@ describe('osh-oauth2', function() {
           response_type: 'code',
           redirect_uri: 'https://g00gle.com/callbark'
         })
-        .expect(400, /missing client_id/i, done);
+        .expect(400, /missing client id/i, done);
       });
 
-      xit('should redirect with unrecognized response_type', function(done) {
+      it('should redirect with missing response_type', function(done) {
+        request.get('/authorize')
+        .query({
+          client_id: 'g00gle',
+          redirect_uri: 'https://g00gle.com/callback'
+        })
+        .expect(400, /"redirect"/)
+        .expect(/missing/i, done);
+      });
+
+      it('should redirect with unrecognized response_type', function(done) {
         request.get('/authorize')
         .query({
           response_type: 'geode',
           client_id: 'g00gle',
           redirect_uri: 'https://g00gle.com/callback'
         })
-        .redirects(0)
-        .expect(302)
-        .expect('Location', /unsupported_response_type/, done);
+        .expect(400, /"redirect"/)
+        .expect(/unsupported_response_type/, done);
       });
+    });
+  });
+
+  function OAuth2Token(opts) {
+    var oauth2 = OAuth2(
+      merge(opts, {debug: true})
+    );
+    var app = express();
+    app.post(
+      '/token',
+      oauth2.token()
+    );
+    return supertest(app);
+  }
+
+  describe('client token', function() {
+    it('should return requested scope', function(done) {
+      OAuth2Token({
+        User: User,
+        Client: merge(Client, {
+          grants: ['client_credentials']
+        }),
+        AccessToken: merge(AccessToken, {
+          defaultScope: 'public',
+          revokeScope: false
+        })
+      })
+      .post('/token')
+      .type('form')
+      .auth('tony', 'hey')
+      .send({
+        grant_type: 'client_credentials',
+        scope: 'everything'
+      })
+      .expect(200)
+      .expect(/"scope":"everything"/, done);
+    });
+
+    it('should return default scope', function(done) {
+      OAuth2Token({
+        User: User,
+        Client: merge(Client, {
+          grants: ['client_credentials']
+        }),
+        AccessToken: merge(AccessToken, {
+          defaultScope: 'public',
+          revokeScope: false
+        })
+      })
+      .post('/token')
+      .type('form')
+      .auth('tony', 'hey')
+      .send({
+        grant_type: 'client_credentials'
+      })
+      .expect(200)
+      .expect(/access_token/)
+      .expect(/expires_in/)
+      .expect(/scope/)
+      .expect(/public/, done);
+    });
+
+    it('should revoke scope', function(done) {
+      OAuth2Token({
+        User: User,
+        Client: merge(Client, {
+          grants: ['client_credentials']
+        }),
+        AccessToken: merge(AccessToken, {
+          defaultScope: 'public',
+          revokeScope: function(scope, user, client, callback) {
+            callback(
+              null,
+              OAuth2.removeScope('secret', scope)
+            );
+          }
+        })
+      })
+      .post('/token')
+      .type('form')
+      .auth('tony', 'hey')
+      .send({
+        grant_type: 'client_credentials',
+        scope: 'public secret'
+      })
+      .expect(200)
+      .expect(/"scope":"public"/, done);
     });
   });
 
@@ -139,18 +247,27 @@ describe('osh-oauth2', function() {
   describe('auth code token', function() {
     
     var oauth2 = OAuth2({
-      AuthorizationCode: AuthorizationCode
+      debug: true,
+      AuthorizationCode: AuthorizationCode,
+      Client: merge(Client, {
+        grants: ['client_credentials', 'authorization_code']
+      }),
+      User: User,
+      AccessToken: merge(AccessToken, {
+        defaultScope: 'public',
+        revokeScope: false
+      })
     });
 
     var app = express();
     app.use('/authorize', oauth2.authorize());
-    //app.post('/token', oauth2.token());
+    app.post('/token', oauth2.token());
 
     var request = supertest(app);
 
     it('should work', function(done) {
-      // Authorization code returned from decision endpoint.
       var code;
+      var access_token;
 
       var query = {
         response_type: 'code',
@@ -160,32 +277,45 @@ describe('osh-oauth2', function() {
         state: 'csrf'
       };
 
+      function login(done) {
+        request.post('/token')
+        .type('form')
+        .auth('tony', 'hey')
+        .send({
+          grant_type: 'client_credentials',
+          scope: 'authorization'
+        })
+        .expect(200, /authorization/)
+        .end(function(err, res) {
+          if (err) done(err);
+          else {
+            access_token = res.body.access_token;
+            done();
+          }
+        });
+      }
+
       function validate(done) {
         request.get('/authorize')
+        .set('x-access-token', access_token)
         .query(query)
-        .expect(200, done);
+        .expect(200, /Tony/, done);
       }
 
       function decide(done) {
         request.post('/authorize')
         .type('form')
-        .auth('tony', 'hey')
+        .set('x-access-token', access_token)
+        .query(query)
         .send(
           merge(query, {scope: 'accounts'})
         )
-        .redirects(0)
-        //.end(function(err, res) {
-        //  console.log(res.text);
-        //  done(err);
-        //});
-        .expect(302)
-        .expect('Location', /g00gle/)
-        .expect('Location', /code=/)
-        .expect('Location', /state=csrf/)
         .end(function(err, res) {
           if (err) done(err);
           else {
-            code = /code=(\w+)/.exec(res.header['location'])[1];
+            console.log(res.body);
+            code = res.body.code;
+            expect(res.body.redirect).to.be.ok();
             console.log(code);
             done();
           }
@@ -197,7 +327,7 @@ describe('osh-oauth2', function() {
         .type('form')
         .auth('g00gle', '!evil')
         .send({
-          grant_type: 'authorization_code',
+          grant_type: 'bauthorization_code',
           code: code,
           redirect_uri: 'https://g00gle.com/callback'
         })
@@ -205,11 +335,11 @@ describe('osh-oauth2', function() {
         .expect(/access_token/, done);
       }
 
-      series([validate, decide, token], done);
+      series([login, validate, decide, token], done);
     });
   });
 
-  describe('password token', function() {
+  xdescribe('password token', function() {
     var oauth2 = OAuth2({
     });
 

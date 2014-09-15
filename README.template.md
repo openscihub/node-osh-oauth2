@@ -65,6 +65,21 @@ the `client_credentials` grant type, where the client *is* the resource
 owner.
 
 
+## A User is a Client
+
+A User is a Client that is also a resource owner. An important consequence
+of this design decision is that the authorization server never authenticates
+a User, only Clients. This is why the User model does not require an
+`authenticate()` method.
+
+Another consequence is that `username` must be a valid `client_id`. [The OAuth2
+standard](http://tools.ietf.org/html/rfc6749#appendix-A) says a `client_id`
+should be an array of `VSCHAR`s, where `VSCHAR` is defined by the unicode range
+[`U+0020 - U+007E`](http://unicode-table.com/en/#basic-latin).
+Fortunately, this range is quite generous when it comes to selecting
+usernames, and you will probably want to restrict the range further using
+`Client.validateId`.
+
 
 ## Example
 
