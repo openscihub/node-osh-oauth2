@@ -38,7 +38,7 @@ var DefaultAuthorizationCode = merge(DefaultModel, {
     generateToken(callback);
   },
   lifetime: implementModelMethod(
-    'lifetime: {String|Function(client, user, scope, callback)}'
+    'lifetime: Number|Function(scope, client, user)<Number>'
   )
 });
 
@@ -73,7 +73,7 @@ var DefaultAccessToken = merge(DefaultModel, {
     OAuth2.generateToken(callback);
   },
   lifetime: implementModelMethod(
-    'lifetime: String|Function(client, user, scope, callback)'
+    'lifetime: Number|Function(scope, client, user)<Number>'
   ),
   authorizationScope: 'authorization',
   defaultScope: implementModelMethod(
@@ -83,7 +83,7 @@ var DefaultAccessToken = merge(DefaultModel, {
     'revokeScope: String|Function(scope, client, user, callback)'
   ),
   allowRefresh: implementModelMethod(
-    'allowRefresh: Boolean|Function(accessToken, client, user)'
+    'allowRefresh: Boolean|Function(accessToken, client, user)<Boolean>'
   )
 });
 
@@ -93,7 +93,7 @@ var DefaultRefreshToken = merge(DefaultModel, {
     OAuth2.generateToken(callback);
   },
   lifetime: implementModelMethod(
-    'lifetime: String|Function(client, user, scope, callback)'
+    'lifetime: Number|Function(scope, client, user)<Number>'
   )
 });
 
@@ -130,355 +130,17 @@ OAuth2 = Class(function(opts) {
 
 
 
-
-OAuth2.FLOWS = {
-
-  /**
-   *  For requesting an access token via resource owner password.
-   *  
-   */
-
-  PASSWORD_TOKEN: [
-    'validatePasswordTokenRequest',
-    'maybeLoadClient',
-    'authenticateClient',
-    'allowPasswordToken',
-    'readUserCredentials',
-    'maybeLoadUser',
-    'newAccessToken',
-    'saveAccessToken',
-    'sendToken'
-  ],
-
-  /**
-   *  For requesting an access token where the client is the
-   *  resource owner. This is a flow
-   */
-
-  /**
-   *  This is a data endpoint. No form is rendered. It exchanges a well-formed
-   *  authorization request (all query parameters exist and redirect_uri
-   *  matches that registered by client) for a 200 OK response or a 4xx
-   *  response if the validation fails.  This middleware can be used behind the
-   *  scenes when rendering server-side, or can be queried using AJAX from the
-   *  user-agent before presenting the resource owner with an authorization
-   *  form.
-   */
-
-
-
-  /**
-   *  From the authorization form, a decision is sent here.
-   */
-
-
-  IMPLICIT: [
-    'init',
-    'validateAuthRequest',
-    'readAuthClientId',
-    'requireAndValidateClientId',
-    'maybeLoadClient',
-    'readAuthRedirectUri',
-    'validateRedirectUri',
-    'readAuthResponseType',
-    'validateResponseType',
-    'ok'
-  ]
-
-};
-
 /**
- *  Utility for setting expiration Date from lifetime in
- *  seconds.
+ *  Utility functions.
  */
 
-
 extend(OAuth2, {
-
-
-  redirect: function(req, res, next) {
-    var oauth2 = req.oauth2;
-    var code = res.code;
-    var codeUri = url.parse(oauth2.redirect_uri, true);
-    extend(codeUri.query, {
-      code: code.code,
-      state: code.state
-    });
-    res.redirect(
-      url.format(codeUri)
-    );
-  },
-
-  validateAuthRequest: function(req, res, next) {
-    var oauth2 = req.oauth2;
-    oauth2.response_type = req.query.response_type;
-    if (!oauth2.response_type) {
-      return OAuth2Error(
-        'invalid_request',
-        'Missing a response_type.'
-      );
-    }
-
-    oauth2.client_id = req.query.client_id;
-    if (!oauth2.client_id) {
-      return OAuth2Error(
-        'invalid_request',
-        'Missing a client_id.'
-      );
-    }
-
-    oauth2.redirect_uri = req.query.redirect_uri;
-    oauth2.scope = req.query.scope;
-    oauth2.state = req.query.state;
-
-    next();
-  },
-
-  readAuthRedirectUri: function(req, res, next) {
-    var oauth2 = req.oauth2;
-    oauth2.redirect_uri = req.query.redirect_uri;
-    if (!oauth2.redirect_uri) {
-      return OAuth2Error(
-        'invalid_request',
-        'Missing redirect_uri in authorization request.'
-      );
-    }
-    else next();
-  },
-
-  readDecisionRedirectUri: function(req, res, next) {
-    var oauth2 = req.oauth2;
-    oauth2.redirect_uri = req.body.redirect_uri;
-    if (!oauth2.redirect_uri) {
-      return OAuth2Error(
-        'invalid_request',
-        'Missing redirect_uri in decision post.'
-      );
-    }
-    else next();
-  },
-
-
-  readAuthResponseType: function(req, res, next) {
-    var oauth2 = req.oauth2;
-    oauth2.response_type = req.query.response_type;
-    if (!oauth2.response_type) {
-      OAuth2ErrorRedirect(
-        'invalid_request',
-        'Missing response_type in authorization request.'
-      );
-    }
-    else next();
-  },
-
-  readDecisionResponseType: function(req, res, next) {
-    var oauth2 = req.oauth2;
-    oauth2.response_type = req.body.response_type;
-    if (!oauth2.response_type) {
-      OAuth2ErrorRedirect(
-        'invalid_request',
-        'Missing response_type in decision post.'
-      );
-    }
-    else next();
-  },
-
-  ok: function(req, res, next) {
-    res.status(200);
-    res.send({message: 'Much success.'});
-  },
-
-
-
-  validatePasswordTokenRequest: function(req, res, next) {
-    var oauth2 = req.oauth2;
-    oauth2.username = req.body.username;
-    if (!oauth2.username) {
-      return OAuth2Error(
-        'invalid_request',
-        'No username given'
-      );
-    }
-
-    oauth2.password = req.body.password;
-    if (!oauth2.password) {
-      return OAuth2Error(
-        'invalid_request',
-        'No password given'
-      );
-    }
-
-    oauth2.scope = req.body.scope;
-
-    var creds = auth(req);
-
-    if (creds) {
-      oauth2.client_id = creds.name;
-      oauth2.client_secret = creds.pass;
-    }
-
-    next();
-  },
-
-  allowPasswordToken: function(req, res, next) {
-    next();
-  },
-
-  validateCodeTokenRequest: function(req, res, next) {
-    var body = req.body;
-    var oauth2 = req.oauth2;
-
-    oauth2.code = body.code;
-    if (!oauth2.code) {
-      return OAuth2Error(
-        'invalid_request',
-        'Authorization code token request is missing a code'
-      );
-    }
-
-    oauth2.redirect_uri = body.redirect_uri;
-
-    var creds = auth(req);
-
-    if (creds && body.client_id) {
-      return OAuth2Error(
-        'invalid_request',
-        'Client was given in Authorization header and request body'
-      );
-    }
-    else if (!creds && !body.client_id) {
-      return OAuth2Error(
-        'invalid_request',
-        'Auth code token request. Missing client credentials'
-      );
-    }
-
-    oauth2.client_id = body.client_id || creds.name;
-
-    if (creds) {
-      oauth2.client_secret = creds.pass;
-    }
-
-    next();
-  },
-
-
-
-  /**
-   *  Used in password token flow and auth code decision flow. Required
-   *  in both cases.
-   *
-   */
-
-  readUserCredentials: function(req, res, next) {
-    var oauth2 = req.oauth2;
-    oauth2.username = req.body.username;
-    oauth2.password = req.body.password;
-    next();
-  },
-
-
-
-  checkRefreshToken: function(req, res, next) {
-    if (req.refreshToken.expires < req.began) {
-      OAuth2Error({
-        error: 'invalid_grant',
-        desc: 'The refresh token has expired'
-      });
-    } else {
-      next();
-    }
-  },
-
-
-
-
-
-
-
-  /**
-   * Get bearer token from request header. It must exist.
-   * 
-   *
-   * Extract token from request according to RFC6750
-   *
-   * @param  {Function} done
-   * @this   OAuth
-   */
-
-  readAccessToken: function(req, res, next) {
-    var header = req.get('Authorization');
-    
-    // Header: http://tools.ietf.org/html/rfc6750#section-2.1
-    if (header) {
-      var matches = header.match(/Bearer\s(\S+)/);
-      if (!matches) {
-        return res.send(401, 'Malformed auth header');
-      }
-      req.access_token = matches[1];
-      next();
-    } else {
-      res.status(401);
-      res.send('Nonexistent auth header');
-    }
-  },
-
-
-  checkScope: function(req, res, next) {
-    var scope = req.scope.split(' ');
-    for (var i = 0; i < scope.length; i++) {
-      if (scope[i] === res.scope) {
-        return next();
-      }
-    }
-    res.send(401,
-      'Access denied. Token has scope: [' +
-      req.scope + '], but resource requires scope: ' +
-      res.scope
-    );
-  },
-
-  checkAccessExpiration: function(req, res, next) {
-    if (req.expires < req.began) {
-      res.send(401, 'Access token has expired');
-    }
-    else next();
-  },
-
-  checkRefreshExpiration: function(req, res, next) {
-    next();
-  },
-
-  /**
-   *  Static utility functions used by default middleware.
-   */
-
-
-  validateParams: function(params, obj, msg, req, res, next) {
-    var param;
-    for (var name in params) {
-      param = params[name];
-      if (!obj[name] && param.required) {
-        OAuth2Error(
-          'invalid_request',
-          msg.replace('%param', name)
-        );
-        return true;
-      }
-      req[name] = obj[name];
-    }
-    next && next();
-  },
 
   extendUriQuery: function(uri, query) {
     uri = url.parse(uri, true);
     extend(uri.query, query);
     return url.format(uri);
   },
-
-  hashSecret: bcrypt.hash,
-
-  validateSecret: bcrypt.compare,
 
   runFlow: runFlow,
 
@@ -494,12 +156,269 @@ extend(OAuth2, {
 
   removeScope: removeScope,
 
+  hasScope: function(subScope, scope) {
+    subScope = OAuth2.scopeArray(subScope);
+    scope = OAuth2.scopeArray(scope);
+    for (var i = 0, len = subScope.length; i < len; i++) {
+      if (scope.indexOf(subScope[i]) >= 0) return true;
+    }
+  },
+
   expirationFromLifetime: function(now, lifetime) {
     var expires = new Date(now);
     expires.setSeconds(expires.getSeconds() + lifetime);
     return expires;
   }
 });
+
+
+/**
+ *  OAuth2 instance methods. These create middleware functions
+ *  that then run middleware flows.
+ */
+
+OAuth2.prototype.token = function(flows) {
+  //var oauth2 = merge(this.oauth2);
+  var OAuth2Request = this.OAuth2Request;
+  var flow = this.flows.token;
+  var subFlows = {
+    client_credentials: this.flows.clientToken,
+    password: this.flows.password,
+    authorization_code: this.flows.codeToken
+  };
+
+  return function(req, res, next) {
+    log('~~≈≈ Token ≈≈~~');
+    req.oauth2 = OAuth2Request(req, res);
+    req.oauth2.flows = subFlows;
+    OAuth2.runFlow(flow, req, res, next);
+  };
+};
+
+
+/**
+ *  Authorize resource requests.
+ *
+ *  Middleware that limits resource access by scope only. Consider this a
+ *  first line of defense; the owner of the resource being requested still
+ *  needs to be matched with the resource owner that granted the access token.
+ *
+ *  Call this middleware before returning a protected resource. Like so,
+ *
+ *  app.get(
+ *    '/account',
+ *    oauth2.allow('accounts'),
+ *    function(req, res, next) {
+ *    
+ *    }
+ *  );
+ *
+ *  @param {string} scope The scope permission required to access the
+ *  resource.
+ */
+
+
+OAuth2.prototype.allow = function(scope) {
+  if (!scope || !OAuth2.scopeArray(scope).length) {
+    throw new Error(
+      'oauth2.allow() needs a scope. If you just want to load a ' +
+      '(possibly existing) access token + user and client models, ' +
+      'use oauth2.load() instead.'
+    );
+  }
+  scope = OAuth2.scopeString(scope);
+
+  var OAuth2Request = this.OAuth2Request;
+  var flow = this.flows.allow;
+
+  return function(req, res, next) {
+    req.oauth2 = OAuth2Request(req, res);
+    req.oauth2.scope = scope;
+    OAuth2.runFlow(flow, req, res, next);
+  };
+};
+
+
+/**
+ *  Make middleware that reads an access token from the request,
+ *  and loads the client and user associated with the token into
+ *  req.oauth2.client and req.oauth2.user, respectively.
+ *
+ *  This does not fail when an access token does not exist.
+ */
+
+OAuth2.prototype.load = function() {
+  var OAuth2Request = this.OAuth2Request;
+  var flow = this.flows.load;
+
+  return function(req, res, next) {
+    req.oauth2 = OAuth2Request(req, res);
+    OAuth2.runFlow(flow, req, res, next);
+  };
+};
+
+/**
+ *  The authorization endpoint. This provides both a GET and
+ *  POST response, so it should be mounted like:
+ *
+ *    var app = express();
+ *    app.use('/authorize', oauth2.authorize());
+ *
+ */
+
+OAuth2.prototype.authorize = function() {
+  var OAuth2Request = this.OAuth2Request;
+  var flow = this.flows.code;
+  var subFlows = {
+    request: this.flows.codeRequest,
+    authorization: this.flows.codeAuthorization
+  };
+  var debug = this.opts.debug;
+
+  return function(req, res, next) {
+    debug && log('~~≈≈ Authorization code ≈≈~~');
+    req.oauth2 = OAuth2Request(req, res);
+    req.oauth2.flows = subFlows;
+    OAuth2.runFlow(flow, req, res, next);
+  };
+};
+
+
+module.exports = OAuth2;
+
+/**
+ *  Endpoint flows. Each array is an ordered list of middleware
+ *  functions to run. The functions are found under the
+ *  OAuth2.middleware namespace, which follows this definition.
+ */
+
+OAuth2.flows = {
+  code: [
+    'init',
+    'maybeReadQueryClientId',
+    'requireAndValidateClientId',
+    'maybeLoadClient',
+    'requireClient',
+    'maybeReadQueryRedirectUri',
+    'validateRedirectUriWithClient',
+    'allowResponseType',
+    'maybeReadAccessTokenId',
+    'maybeLoadAccessToken',
+    'maybeReadAccessTokenUserId',
+    'maybeLoadUser',
+    'branchCodeAuthorizationRequest',
+    'authError'
+  ],
+
+  codeRequest: [
+    'okCodeRequest',
+    'authError'
+  ],
+
+  codeAuthorization: [
+    'parseForm',
+    'requireUser', // effectively requires accessToken. see 'code' flow.
+    'checkAccessTokenExpiration',
+    'requireAuthorizationScopeInAccessToken',
+    'readAuthorizedScope',
+    'removeAuthorizationScope',
+    'revokeScope',
+    'newAuthorizationCode',
+    'saveAuthorizationCode',
+    'sendCode',
+    'authError'
+  ],
+
+  token: [
+    'init',
+    'parseForm',
+    'validateTokenRequest',
+    'requireBasicClientCredentials',
+    'maybeLoadClient',
+    'requireClient',
+    'authenticateClient',
+    'allowGrantType',
+    'branchTokenRequest',
+    'tokenError'
+  ],
+
+  clientToken: [
+    'setUserIdFromClientId',
+    'maybeLoadUser',
+    'requireUser',
+    'setDefaultScope',
+    'readBodyScope',
+    'revokeScope',
+    'newAccessToken',
+    'newRefreshToken',
+    'saveAccessToken',
+    'saveRefreshToken',
+    'sendToken',
+    'tokenError'
+  ],
+
+  codeToken: [
+    'requireBodyAuthorizationCode',
+    'maybeLoadAuthorizationCode',
+    'requireAuthorizationCode',
+    'checkCodeExpiration',
+    'validateRedirectUriWithCode',
+    'readCodeScope',
+    'readCodeUserId',
+    'maybeLoadUser',
+    'requireUser',
+    'newAccessToken',
+    'newRefreshToken',
+    'saveAccessToken',
+    'saveRefreshToken',
+    'deleteAuthorizationCode',
+    'sendToken',
+    'tokenError'
+  ],
+
+  /**
+   *  Protect an API resource with scope.
+   *
+   *  Requires
+   *
+   *    - req.oauth2.scope
+   *
+   *  to be set in runner middleware setup by
+   *  OAuth2.prototype.scope.
+   */
+
+  allow: [
+    'init',
+    'maybeReadAccessTokenId',
+    'maybeLoadAccessToken',
+    'requireAccessToken',
+    'checkAccessTokenExpiration',
+    'checkAccessTokenScope',
+    'maybeReadAccessTokenUserId',
+    'maybeLoadUser',
+    'requireUser',
+    'maybeReadAccessTokenClientId',
+    'maybeLoadClient',
+    'requireClient',
+    'accessError'
+  ],
+
+  /**
+   *  Read an access token, and load user and client if
+   *  found. Does not error if none found.
+   */
+
+  load: [
+    'init',
+    'maybeReadAccessTokenId',
+    'maybeLoadAccessToken',
+    'maybeReadAccessTokenClientId',
+    'maybeLoadClient',
+    'maybeReadAccessTokenUserId',
+    'maybeLoadUser'
+  ]
+
+};
 
 
 /**
@@ -513,13 +432,13 @@ OAuth2.responseTypeGrantTypes = {
 
 
 /**
- *  The most generic middleware. Used by most flows.
+ *  Middleware!
  */
 
 OAuth2.middleware = {
 
   /**
-   *  Begins all flows (after branching).
+   *  Begins all flows.
    */
 
   init: function(req, res, next) {
@@ -835,9 +754,30 @@ OAuth2.middleware = {
     }
   },
 
+  /**
+   *  Get bearer token from request header. It must exist.
+   *
+   *  TODO: Extract token from request according to RFC6750
+   */
+
   maybeReadAccessTokenId: function(req, res, next) {
     req.oauth2.accessTokenId = req.get('x-access-token');
     next();
+
+    //var header = req.get('Authorization');
+    //
+    //// Header: http://tools.ietf.org/html/rfc6750#section-2.1
+    //if (header) {
+    //  var matches = header.match(/Bearer\s(\S+)/);
+    //  if (!matches) {
+    //    return res.send(401, 'Malformed auth header');
+    //  }
+    //  req.access_token = matches[1];
+    //  next();
+    //} else {
+    //  res.status(401);
+    //  res.send('Nonexistent auth header');
+    //}
   },
 
   /**
@@ -965,7 +905,7 @@ OAuth2.middleware = {
         };
 
         if ('function' == typeof AuthorizationCode.lifetime) {
-          code.lifetime = AuthorizationCode.lifetime(client, user, scope);
+          code.lifetime = AuthorizationCode.lifetime(scope, client, user);
         }
         else {
           code.lifetime = AuthorizationCode.lifetime;
@@ -1151,7 +1091,7 @@ OAuth2.middleware = {
 
         token.lifetime = (
           'function' == typeof AccessToken.lifetime ?
-          AccessToken.lifetime(client, user, scope) :
+          AccessToken.lifetime(scope, client, user) :
           AccessToken.lifetime
         );
 
@@ -1463,248 +1403,6 @@ OAuth2.middleware = {
 };
 
 
-
-OAuth2.flows = {
-  code: [
-    'init',
-    'maybeReadQueryClientId',
-    'requireAndValidateClientId',
-    'maybeLoadClient',
-    'requireClient',
-    'maybeReadQueryRedirectUri',
-    'validateRedirectUriWithClient',
-    'allowResponseType',
-    'maybeReadAccessTokenId',
-    'maybeLoadAccessToken',
-    'maybeReadAccessTokenUserId',
-    'maybeLoadUser',
-    'branchCodeAuthorizationRequest',
-    'authError'
-  ],
-
-  codeRequest: [
-    'okCodeRequest',
-    'authError'
-  ],
-
-  codeAuthorization: [
-    'parseForm',
-    'requireUser', // effectively requires accessToken. see 'code' flow.
-    'checkAccessTokenExpiration',
-    'requireAuthorizationScopeInAccessToken',
-    'readAuthorizedScope',
-    'removeAuthorizationScope',
-    'revokeScope',
-    'newAuthorizationCode',
-    'saveAuthorizationCode',
-    'sendCode',
-    'authError'
-  ],
-
-  token: [
-    'init',
-    'parseForm',
-    'validateTokenRequest',
-    'requireBasicClientCredentials',
-    'maybeLoadClient',
-    'requireClient',
-    'authenticateClient',
-    'allowGrantType',
-    'branchTokenRequest',
-    'tokenError'
-  ],
-
-  clientToken: [
-    'setUserIdFromClientId',
-    'maybeLoadUser',
-    'requireUser',
-    'setDefaultScope',
-    'readBodyScope',
-    'revokeScope',
-    'newAccessToken',
-    'newRefreshToken',
-    'saveAccessToken',
-    'saveRefreshToken',
-    'sendToken',
-    'tokenError'
-  ],
-
-  codeToken: [
-    'requireBodyAuthorizationCode',
-    'maybeLoadAuthorizationCode',
-    'requireAuthorizationCode',
-    'checkCodeExpiration',
-    'validateRedirectUriWithCode',
-    'readCodeScope',
-    'readCodeUserId',
-    'maybeLoadUser',
-    'requireUser',
-    'newAccessToken',
-    'newRefreshToken',
-    'saveAccessToken',
-    'saveRefreshToken',
-    'deleteAuthorizationCode',
-    'sendToken',
-    'tokenError'
-  ],
-
-  /**
-   *  Protect an API resource with scope.
-   *
-   *  Requires
-   *
-   *    - req.oauth2.scope
-   *
-   *  to be set in runner middleware setup by
-   *  OAuth2.prototype.scope.
-   */
-
-  allow: [
-    'init',
-    'maybeReadAccessTokenId',
-    'maybeLoadAccessToken',
-    'requireAccessToken',
-    'checkAccessTokenExpiration',
-    'checkAccessTokenScope',
-    'maybeReadAccessTokenUserId',
-    'maybeLoadUser',
-    'requireUser',
-    'maybeReadAccessTokenClientId',
-    'maybeLoadClient',
-    'requireClient',
-    'accessError'
-  ],
-
-  /**
-   *  Read an access token, and load user and client if
-   *  found. Does not error if none found.
-   */
-
-  load: [
-    'init',
-    'maybeReadAccessTokenId',
-    'maybeLoadAccessToken',
-    'maybeReadAccessTokenClientId',
-    'maybeLoadClient',
-    'maybeReadAccessTokenUserId',
-    'maybeLoadUser'
-  ]
-
-};
-
-/**
- *  For the html server.
- */
-
-OAuth2.middleware.authorize = {
-
-
-};
-
-OAuth2.flows.authorize = [
-
-
-];
-
-OAuth2.Authorize = function(opts) {
-  
-  return function(req, res, next) {
-    request.get(opts.token)
-
-  };
-};
-
-
-OAuth2.prototype.token = function(flows) {
-  //var oauth2 = merge(this.oauth2);
-  var OAuth2Request = this.OAuth2Request;
-  var flow = this.flows.token;
-  var subFlows = {
-    client_credentials: this.flows.clientToken,
-    password: this.flows.password,
-    authorization_code: this.flows.codeToken
-  };
-
-  return function(req, res, next) {
-    log('~~≈≈ Token ≈≈~~');
-    req.oauth2 = OAuth2Request(req, res);
-    req.oauth2.flows = subFlows;
-    OAuth2.runFlow(flow, req, res, next);
-  };
-};
-
-
-/**
- *  Authorize resource requests.
- *
- *  Middleware that limits resource access by scope only. Consider this a
- *  first line of defense; the owner of the resource being requested still
- *  needs to be matched with the resource owner that granted the access token.
- *
- *  Call this middleware before returning a protected resource. Like so,
- *
- *  app.get(
- *    '/account',
- *    app.scope('accounts'),
- *    function(req, res, next) {
- *    
- *    }
- *  );
- *
- *  @param {string} scope The scope permission required to access the
- *  resource.
- */
-
-
-OAuth2.prototype.allow = function(scope) {
-  if (!scope || !OAuth2.scopeArray(scope).length) {
-    throw new Error(
-      'oauth2.allow() needs a scope. If you just want to load a ' +
-      '(possibly existing) access token + user and client models, ' +
-      'use oauth2.load() instead.'
-    );
-  }
-  scope = OAuth2.scopeString(scope);
-
-  var OAuth2Request = this.OAuth2Request;
-  var flow = this.flows.allow;
-
-  return function(req, res, next) {
-    req.oauth2 = OAuth2Request(req, res);
-    req.oauth2.scope = scope;
-    OAuth2.runFlow(flow, req, res, next);
-  };
-};
-
-
-OAuth2.prototype.load = function() {
-  var OAuth2Request = this.OAuth2Request;
-  var flow = this.flows.load;
-
-  return function(req, res, next) {
-    req.oauth2 = OAuth2Request(req, res);
-    OAuth2.runFlow(flow, req, res, next);
-  };
-};
-
-
-OAuth2.prototype.authorize = function() {
-  var OAuth2Request = this.OAuth2Request;
-  var flows = this.flows;
-  var debug = this.opts.debug;
-
-  return function(req, res, next) {
-    debug && log('~~≈≈ Authorization code ≈≈~~');
-    req.oauth2 = OAuth2Request(req, res);
-    req.oauth2.flows = {
-      request: flows.codeRequest,
-      authorization: flows.codeAuthorization
-    };
-    OAuth2.runFlow(flows.code, req, res, next);
-  };
-};
-
-module.exports = OAuth2;
 
 /**
  *  Make a flow given an array of strings or functions. Use default
