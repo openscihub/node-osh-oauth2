@@ -489,8 +489,10 @@ describe('osh-oauth2', function() {
         .set('x-access-token', access_token)
         .query(query)
         .send(
-          merge(query, {scope: 'accounts'})
+          {authorized_scope: 'accounts'}
         )
+        .expect(200)
+        .expect(/"code":/)
         .end(function(err, res) {
           if (err) done(err);
           else {

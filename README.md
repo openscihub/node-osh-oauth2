@@ -3,7 +3,13 @@
 A collection of Connect/Express middleware functions and orderings that help
 you implement an OAuth2 server in Node.js. The middleware is concealed by a
 high-level, yet detailed, model abstraction described in
-[Configuration](#configuration).
+[Configuration](#configuration). This library is very inspired by
+[node-oauth2-server](https://github.com/thomseddon/node-oauth2-server).
+
+- [Example](#example)
+- [Configuration](#configuration)
+- [Authorization code flow](#authorization-code-flow)
+- [License](#license)
 
 ## Example
 
@@ -11,13 +17,15 @@ The simplest flow is probably a token request using the
 `client_credentials` grant type, so this example handles only that case.
 
 ```js
-var OAuth2 = require('osh-oauth2');
+var OAuth2 = require('..');
 var bcrypt = require('bcrypt');
 var supertest = require('supertest');
+var express = require('express');
 
 var oauth2 = OAuth2({
   User: {
     load: function(id, callback) {
+      // There can only be one...
       callback(null, {
         name: 'Homer'
       });
@@ -26,7 +34,7 @@ var oauth2 = OAuth2({
 
   Client: {
     load: function(id, callback) {
-      // There is only one client.
+      // There can only be one...
       callback(null, {
         secret_hash: bcrypt.hashSync('d0nutz', 10)
       });
@@ -64,8 +72,165 @@ request.post('/token')
   grant_type: 'client_credentials',
   scope: 'secrets'
 })
-.expect(200, /access_token/);
+.expect(200, /access_token/)
+.end(function(err, res) {
+  console.log(res.body);
+});
+
 ```
+
+The above code is from `example/simple.js`.
+
+## Usage
+
+Usage of this library is very similar to
+[node-oauth2-server](https://github.com/thomseddon/node-oauth2-server) except
+for the authorization code endpoint (see [discussion](#authorization-code-flow)
+for details).
+
+## Instance methods
+
+These are the methods available on:
+
+```js
+var oauth2 = OAuth2({ /* ... */ });
+```
+
+### oauth2.token()
+
+This method produces a middleware function that acts as the access token
+endpoint (see http://tools.ietf.org/html/rfc6749#section-3.2). It should be
+mounted under an express `post()` route.
+
+Example:
+
+```js
+app.post('/token', oauth2.token());
+```
+
+### oauth2.authorize()
+
+This produces middleware for OAuth2's custom authorization code endpoint.
+This middleware is only a part of the full authorization process (as detailed
+in [authorization code flow](#authorization-code-flow)).
+
+Example usage:
+
+```js
+app.use('/authorize', oauth2.authorize());
+```
+
+It handles both `GET` and `POST` requests, and therefore should be mounted
+using the express `use()` method. All requests to this endpoint should
+conform to the standard (http://tools.ietf.org/html/rfc6749#section-4.1.1)
+
+This middleware looks for an access token in the request (and, in fact,
+*requires* one for `POST` requests). The access token must contain
+[authorization scope](#accesstokenauthorizationscope) to have any effect.
+
+#### GET
+
+`GET` requests will return a 200 ok response only if the query string is
+well-formed and the provided `client_id` is validated against the provided
+`redirect_uri`. If an access token with authorization scope is provided to this
+endpoint, the (non-confidential) user information (obtained from
+[User.load()](#userload)) will be returned in the response body
+like:
+
+```
+{
+  "user": { ...custom user properties here... }
+}
+```
+
+If the access token is missing or does not possess authorization scope,
+the following is returned:
+
+```
+{
+  "user": null
+}
+```
+
+#### POST
+
+The following request body parameters are expected
+
+- `authorized_scope`: This is a space-separated string of scopes. It should
+  be a subset of the scope requested in the query string (parts of the
+  authorized scope not mentioned in the requested scope will be ignored).
+
+This endpoint also requires an access token with authorization scope. This
+satisfies the user authentication requirement vaguely mentioned by the
+standard, and does so using the OAuth2 server itself. Autogenous for real!
+
+On success, a 200 ok response is returned, with the authorization code
+placed inside a JSON response body. The response parameters are
+(http://tools.ietf.org/html/rfc6749#section-4.1.2):
+
+- `code`: see http://tools.ietf.org/html/rfc6749#section-4.1.2
+- `state`: see http://tools.ietf.org/html/rfc6749#section-4.1.2
+- `redirect`: *If present*, this is the url to which the receiver of this
+  response should redirect the user.
+
+On error, a 400 status is returned with the following JSON body:
+
+- `error`: see http://tools.ietf.org/html/rfc6749#section-4.1.2.1
+- `error_description`: see http://tools.ietf.org/html/rfc6749#section-4.1.2.1
+- `error_uri`: see http://tools.ietf.org/html/rfc6749#section-4.1.2.1
+- `state`: see http://tools.ietf.org/html/rfc6749#section-4.1.2
+- `redirect`: *If present*, this is the url to which the receiver of this
+  response should redirect the user.
+
+### oauth2.allow(scope)
+
+Protect user resources with this middleware. Only requests carrying an access
+token with the specified scope will get through.
+
+```js
+app.get(
+  '/secret',
+  oauth2.allow('secrets'),
+  function(req, res) {
+    // User and client objects are loaded by oauth2.
+    var user = req.oauth2.user;
+    var client = req.oauth2.client;
+  }
+);
+```
+
+### oauth2.load()
+
+Use this middleware if you want to load client and user from an access
+token only if it exists. This is useful when data from a single
+endpoint depends on the level of access.
+
+```js
+app.get(
+  '/secret',
+  oauth2.load(),
+  function(req, res) {
+    var user = req.oauth2.user;
+    if (user) {
+      // Return user-specific stuff.
+    }
+    else {
+      // Return generic public data.
+    }
+
+    // Or check the scope manually:
+
+    var accessToken = req.oauth2.accessToken;
+    if (accessToken && OAuth2.hasScope(accessToken.scope, 'secrets'))
+      // Return secrets.
+    }
+    else {
+      // Return generic public data.
+    }
+  }
+);
+```
+
 
 ## Configuration
 
@@ -282,7 +447,7 @@ Example:
 AccessToken.lifetime = 3600;
 AccessToken.lifetime = function(scope, client, user) {
   return (
-    OAuth2.hasScope('secrets', scope) ?
+    OAuth2.hasScope(scope, 'secrets') ?
     90 : 3600
   );
 };
@@ -357,7 +522,7 @@ access token with authorization scope. Authorization scope is never given out
 through the authorization code flow; it is only attached to access tokens
 obtained by other grant types, like `'client_credentials'`.
 
-See [authorization flow discussion](#authorization-flow)
+See [authorization code flow discussion](#authorization-code-flow)
 
 #### AccessToken.allowRefresh
 
@@ -412,7 +577,7 @@ Example:
 RefreshToken.lifetime = 36000;
 RefreshToken.lifetime = function(accessToken, client, user) {
   return (
-    OAuth2.hasScope('secrets', accessToken.scope) ?
+    OAuth2.hasScope(accessToken.scope, 'secrets') ?
     900 : 36000
   );
 };
@@ -459,14 +624,14 @@ Example:
 AuthorizationCode.lifetime = 60;
 AuthorizationCode.lifetime = function(accessToken, client, user) {
   return (
-    OAuth2.hasScope('secrets', accessToken.scope) ?
+    OAuth2.hasScope(accessToken.scope, 'secrets') ?
     10 : 60
   );
 };
 ```
 
 
-## Authorization flow
+## Authorization code flow
 
 The OAuth2 standard sort of leaves us hanging when it comes to the details
 of the resource owner authentication/authorization part of an authorization

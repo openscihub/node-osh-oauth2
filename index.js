@@ -156,11 +156,11 @@ extend(OAuth2, {
 
   removeScope: removeScope,
 
-  hasScope: function(subScope, scope) {
-    subScope = OAuth2.scopeArray(subScope);
+  hasScope: function(scope, contains) {
+    contains = OAuth2.scopeArray(contains);
     scope = OAuth2.scopeArray(scope);
-    for (var i = 0, len = subScope.length; i < len; i++) {
-      if (scope.indexOf(subScope[i]) >= 0) return true;
+    for (var i = 0, len = contains.length; i < len; i++) {
+      if (scope.indexOf(contains[i]) >= 0) return true;
     }
   },
 
@@ -843,7 +843,7 @@ OAuth2.middleware = {
 
   readAuthorizedScope: function(req, res, next) {
     var err;
-    var authorizedScope = OAuth2.scopeArray(req.body.scope || '');
+    var authorizedScope = OAuth2.scopeArray(req.body.authorized_scope || '');
     var requestedScope = OAuth2.scopeArray(req.query.scope || '');
     var scope = [];
     authorizedScope.forEach(function(token) {
