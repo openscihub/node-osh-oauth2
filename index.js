@@ -1,11 +1,9 @@
 var crypto = require('crypto');
 var auth = require('basic-auth');
 var log = require('osh-util/logger')('OAuth2');
-var bcrypt = require('bcrypt');
 var extend = require('xtend/mutable');
 var merge = require('xtend/immutable');
 var Class = require('osh-class');
-var series = require('osh-util/series');
 var parseForm = require('body-parser').urlencoded({extended: false});
 var url = require('url');
 var tick = process.nextTick;
