@@ -256,6 +256,8 @@ var oauth2 = OAuth2({
 - [User](#user)
   - [load](#userload)
 - [AccessToken](#accesstoken)
+  - [save](#accesstokensave)
+  - [load](#accesstokenload)
   - [lifetime](#accesstokenlifetime)
   - [generateId](#accesstokengenerateid)
   - [defaultScope](#accesstokendefaultscope)
@@ -263,9 +265,14 @@ var oauth2 = OAuth2({
   - [authorizationScope](#accesstokenauthorizationscope)
   - [allowRefresh](#accesstokenallowrefresh)
 - [RefreshToken](#refreshtoken)
+  - [save](#refreshtokensave)
+  - [load](#refreshtokenload)
   - [generateId](#refreshtokengenerateid)
   - [lifetime](#refreshtokenlifetime)
 - [AuthorizationCode](#authorizationcode)
+  - [save](#authorizationcodesave)
+  - [load](#authorizationcodeload)
+  - [del](#authorizationcodedel)
   - [generateId](#authorizationcodegenerateid)
   - [lifetime](#authorizationcodelifetime)
 
@@ -427,6 +434,48 @@ above](#user).
 The AccessToken model is responsible for setting the default scope, revoking
 scope on a per-client/user basis.
 
+#### AccessToken.save
+
+- signature: `Function(accessToken, callback)`
+- required
+
+The `accessToken` object provided to this function is preloaded with the
+following properties
+
+- `id {String}`: The access token id.
+- `user_id {String}`: The resource owner user id.
+- `client_id {String}`: The client receiving the access token.
+- `lifetime {Number}`: Lifetime of the access token in seconds.
+- `expires {Date}`: The date at which the access token expires.
+- `scope {String}`: Space-separated string of scopes.
+- `type {String}`: The token type.
+
+The object actually saved to disk by this method is arbitrary,
+as long as the above properties are reproduced by
+[AccessToken.load](#accesstokenload); however, you should treat the
+given `accessToken` object as immutable.
+
+#### AccessToken.load
+
+- signature: `Function(id, callback)`
+- required
+
+Load the access token identified by the given id string from persistent storage and
+pass it as the second argument of the given callback. If the access token cannot be
+found in the database (and there was no db error), an error *must not* be given
+to the callback. In this case, leave both callback arguments undefined (or
+falsey).
+
+The following properties are *required* on the returned access token object
+
+- `user_id {String}`: The resource owner user id.
+- `client_id {String}`: The client receiving the access token.
+- `lifetime {Number}`: Lifetime of the access token in seconds.
+- `expires {Date}`: The date at which the access token expires.
+- `scope {String}`: Space-separated string of scopes.
+- `type {String}`: The token type.
+
+
 #### AccessToken.lifetime
 
 - signature: `Number` or `Function(scope, client, user)<Number>`
@@ -537,6 +586,47 @@ barring some catastrophic error.
 
 ### RefreshToken
 
+#### RefreshToken.save
+
+- signature: `Function(refreshToken, callback)`
+- required
+
+The `refreshToken` object provided to this function is preloaded with the
+following properties
+
+- `id {String}`: The refresh token id.
+- `user_id {String}`: The resource owner user id.
+- `client_id {String}`: The client receiving the access and refresh tokens.
+- `lifetime {Number}`: Lifetime of the refresh token in seconds.
+- `expires {Date}`: The date at which the refresh token expires.
+- `scope {String}`: Space-separated string of scopes.
+- `type {String}`: The access token type.
+
+The object actually saved to disk by this method is arbitrary,
+as long as the above properties are reproduced by
+[RefreshToken.load](#refreshtokenload); however, you should treat the
+given `refreshToken` object as immutable.
+
+#### RefreshToken.load
+
+- signature: `Function(id, callback)`
+- required
+
+Load the refresh token identified by the given id string from persistent storage and
+pass it as the second argument of the given callback. If the refresh token cannot be
+found in the database (and there was no db error), an error *must not* be given
+to the callback. In this case, leave both callback arguments undefined (or
+falsey).
+
+The following properties are *required* on the returned refresh token object
+
+- `user_id {String}`: The resource owner user id.
+- `client_id {String}`: The client receiving the access and refresh tokens.
+- `lifetime {Number}`: Lifetime of the refresh token in seconds.
+- `expires {Date}`: The date at which the refresh token expires.
+- `scope {String}`: Space-separated string of scopes.
+- `type {String}`: The access token type.
+
 #### RefreshToken.generateId
 
 - signature: `Function(callback)`
@@ -581,8 +671,61 @@ RefreshToken.lifetime = function(accessToken, client, user) {
 };
 ```
 
-
 ### AuthorizationCode
+
+#### AuthorizationCode.save
+
+- signature: `Function(code, callback)`
+- required
+
+The `code` object provided to this function is preloaded with the
+following properties
+
+- `id {String}`: The authorization code id.
+- `user_id {String}`: The resource owner user id.
+- `client_id {String}`: The client receiving the authorization code.
+- `lifetime {Number}`: Lifetime of the code in seconds.
+- `expires {Date}`: The date at which the code expires.
+- `scope {String}`: Space-separated string of scopes authorized by the code.
+- `redirect_uri {String}`: The redirect uri supplied by the client in the
+  authorization code request query string.
+
+The object actually saved to disk by this method is arbitrary,
+as long as the above properties are reproduced by
+[AuthorizationCode.load](#authorizationcodeload); however, you should treat the
+given `code` object as immutable.
+
+#### AuthorizationCode.load
+
+- signature: `Function(id, callback)`
+- required
+
+Load the authorization code identified by the given id string from
+persistent storage and
+pass it as the second argument of the given callback. If the code cannot be
+found in the database (and there was no db error), an error *must not* be given
+to the callback. In this case, leave both callback arguments undefined (or
+falsey).
+
+The following properties are *required* on the returned code object
+
+- `user_id {String}`: The resource owner user id.
+- `client_id {String}`: The client receiving the authorization code.
+- `lifetime {Number}`: Lifetime of the code in seconds.
+- `expires {Date}`: The date at which the code expires.
+- `scope {String}`: Space-separated string of scopes authorized by the code.
+- `redirect_uri {String}`: The redirect uri supplied by the client in the
+  authorization code request query string.
+
+#### AuthorizationCode.del
+
+- signature: `Function(id, callback)`
+- required
+
+Delete the authorization code identified by `id` from persistent storage.
+Actually, the only requirement after the library calls this method is that
+the identified code *not* be returned from subsequent calls to
+[AuthorizationCode.load](#authorizationcodeload) with the same id.
 
 #### AuthorizationCode.generateId
 
