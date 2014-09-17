@@ -7,6 +7,7 @@ high-level, yet detailed, model abstraction described in
 [node-oauth2-server](https://github.com/thomseddon/node-oauth2-server).
 
 - [Example](#example)
+- [Usage](#usage)
 - [Configuration](#configuration)
 - [Authorization code flow](#authorization-code-flow)
 - [License](#license)
@@ -88,9 +89,7 @@ Usage of this library is very similar to
 for the authorization code endpoint (see [discussion](#authorization-code-flow)
 for details).
 
-## Instance methods
-
-These are the methods available on:
+The following methods are available on:
 
 ```js
 var oauth2 = OAuth2({ /* ... */ });
@@ -128,7 +127,7 @@ This middleware looks for an access token in the request (and, in fact,
 *requires* one for `POST` requests). The access token must contain
 [authorization scope](#accesstokenauthorizationscope) to have any effect.
 
-#### GET
+#### GET oauth2.authorize()
 
 `GET` requests will return a 200 ok response only if the query string is
 well-formed and the provided `client_id` is validated against the provided
@@ -152,7 +151,7 @@ the following is returned:
 }
 ```
 
-#### POST
+#### POST oauth2.authorize()
 
 The following request body parameters are expected
 
@@ -165,8 +164,7 @@ satisfies the user authentication requirement vaguely mentioned by the
 standard, and does so using the OAuth2 server itself. Autogenous for real!
 
 On success, a 200 ok response is returned, with the authorization code
-placed inside a JSON response body. The response parameters are
-(http://tools.ietf.org/html/rfc6749#section-4.1.2):
+placed inside a JSON response body. The response parameters are:
 
 - `code`: see http://tools.ietf.org/html/rfc6749#section-4.1.2
 - `state`: see http://tools.ietf.org/html/rfc6749#section-4.1.2
