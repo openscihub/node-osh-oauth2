@@ -6,11 +6,18 @@ high-level, yet detailed, model abstraction described in
 [Configuration](#configuration). This library is very inspired by
 [node-oauth2-server](https://github.com/thomseddon/node-oauth2-server).
 
+- [Installation](#installation)
 - [Example](#example)
 - [Usage](#usage)
 - [Configuration](#configuration)
 - [Authorization code flow](#authorization-code-flow)
 - [License](#license)
+
+## Installation
+
+```
+npm install osh-oauth2
+```
 
 ## Example
 
