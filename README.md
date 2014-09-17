@@ -5,84 +5,407 @@ you implement an OAuth2 server in Node.js. This library was built (amongst the
 others) with extensibility in mind, keeping the developer near those middleware
 `req` and `res` objects that are oh so familiar and warm.
 
+## Configuration
+
+OAuth2 is configured by defining various models that manage the storage,
+retrieval, and validation of [clients](#client), [users](#user), [access
+tokens](#accesstoken), [refresh tokens](#refreshtoken), and [authorization
+codes](#authorizationcode).
+
+```js
+var oauth2 = OAuth2({
+  Client: { /* options */ },
+  User: { /* options */ },
+  AccessToken: { /* options */ },
+  RefreshToken: { /* options */ },
+  AuthorizationCode: { /* options */ }
+});
+```
+
+
+### Client
+
+A Client is an entity that requests access tokens so that it can read, write,
+and modify user data. For example, a client can be a user requesting its own
+data, or a third-party app requesting data on behalf of a user.
+
+The Client model validates, authenticates, and retrieves client instances. It
+also provides callbacks for allowing/denying access token and authorization
+requests on a per-client basis.
+
+#### Client.load
+
+- signature: `Function(id, callback)`
+- required
+
+Load the client identified by the given id string from persistent storage and
+pass it as the second argument of the given callback. If the client cannot be
+found in the database (and there was no db error), an error *must not* be given
+to the callback. In this case, leave both callback arguments undefined (or
+falsey).
+
+This function is called often.
+
+#### Client.authenticate
+
+- signature: `Function(secret, client, callback)`
+- required
+
+Authenticate a client instance against the provided secret string. The callback
+takes an error as first argument and a boolean as the second. Return a falsey
+as the second argument if authentication fails. Return an error only if
+something goes very wrong with the underlying authentication function.
+
+The secret is parsed from the `Authorization` header in token requests (to
+simplify the life of the developer, we take the advice of the standard to heart
+and require client credentials be sent this way). A custom implementation may
+disregard the provided secret if other authentication measures are in place.
+
+Example:
+
+```js
+var bcrypt = require('bcrypt');
+
+Client.authenticate = function(secret, client, callback) {
+  bcrypt.compare(secret, client.secret_hash, callback);
+};
+```
+
+#### Client.allowGrant
+
+- signature: `Array<String>` or `Function(grant, client)<Boolean>`
+- optional
+- default: `[]`
+
+As an array of strings, indiscriminately allow the grant types listed. As a
+function, return truthy or falsey given a grant type string and the client
+requesting an access token or authorization code. Truthy allows the grant
+type.
+
+The following grant types are defined in the OAuth2 standard:
+
+- `'authorization_code'`
+- `'client_credentials'`
+- `'password'`
+
+The standard discourages use of the `'password'` grant type.
+
+Example:
+
+```js
+Client.allowGrant = function(grant, client) {
+  return ['client_credentials', 'authorization_code'].indexOf(grant) >= 0;
+};
+
+// Or equivalently:
+Client.allowGrant = ['client_credentials', 'authorization_code'];
+```
+
+#### Client.validateId
+
+- signature: `Function(id)<Boolean>`
+- optional
+- default tests for `VSCHAR` string
+
+Validate a client id sent in a request.  In conformance with [the
+standard](http://tools.ietf.org/html/rfc6749#appendix-A), the default
+implementation checks that the id is a nonzero-length array of `VSCHAR`s, where
+`VSCHAR` is defined by the unicode range [`U+0020 -
+U+007E`](http://unicode-table.com/en/#basic-latin).
+
+#### Client.validateRedirectUri
+
+- signature: `Function(uri, client)<Boolean>`
+- required
+
+Validate a redirect uri string given in a request against the client making
+the request. Validate successfully by returning truthy.
+
+Example
+
+```js
+Client.validateRedirectUri = function(uri, client) {
+  return client.redirect_uris.indexOf(uri) >= 0;
+};
+```
+
+
+### User
+
+A User is a [Client](#client) that is also a resource owner. Therefore, **for
+every user, there must exist a client with the same identifier**.
+
+An important consequence of this design decision is that the authorization
+server never authenticates a User, only Clients. This is why the User model
+does not require an `authenticate()` method. Furthermore, authentication
+secrets should never be stored in the User model (they should be stored in the
+Client model); this design creates a nice separation between
+authentication-based (e.g. password hash) and regular (e.g. name) User
+properties.
+
+Another consequence is that a User instance must be identified by a valid
+`client_id`. [The OAuth2
+standard](http://tools.ietf.org/html/rfc6749#appendix-A) says a `client_id`
+should be an array of `VSCHAR`s, where `VSCHAR` is defined by the unicode range
+[`U+0020 - U+007E`](http://unicode-table.com/en/#basic-latin).  Fortunately,
+this range is quite generous when it comes to selecting usernames, and you will
+probably want to restrict the range further using `Client.validateId`.
+
+The User model API is extremely simple. It has two purposes:
+
+- Test that a client is also a user.
+- Provide user-specific properties (like a real name).
+
+Both functions are achieved through a single method `User.load`.
+
+
+#### User.load
+
+- signature: `Function(id, callback)`
+- required
+
+Load the user identified by the given id string from persistent storage and
+pass it as the second argument of the given callback. If the user cannot be
+found in the database (and there was no db error), an error *must not* be given
+to the callback. In this case, leave both callback arguments undefined (or
+falsey).
+
+**NOTE**: User model data is returned by the `oauth2.authorize()` methods!
+Never store secret information (like password hashes) on the User model (or at
+least never return secret data from `User.load`). See the [discussion
+above](#user).
+
+
+### AccessToken
+
+The AccessToken model is responsible for setting the default scope, revoking
+scope on a per-client/user basis.
+
+#### AccessToken.revokeScope
+
+- signature: `Function(scope, client, user, callback)` or falsey
+- required
+- parameters:
+  - `scope {String}`: the scope requested by `client`
+  - `client {Object}`: the client requesting `scope`
+  - `user {Object}`: the resource owner
+  - `callback {Function(err, acceptedScope)}`
+
+Revoke a subset of the scope requested by the given client. The requested scope
+applies to the given user's resources. This is called whenever scope is
+requested by a client, which can occur in an authorization request or a
+direct token request (e.g. `'client_credentials'` grant).
+
+When the client id is the same as the user id, a '`client_credentials`' access
+token is being requested.
+
+The `OAuth2.removeScope()` function is provided for convenient use within
+this method.
+
+Example:
+
+```js
+AccessToken.revokeScope = function(scope, client, user, callback) {
+  scope = OAuth2.removeScope('secrets account', scope);
+  callback(null, scope);
+};
+```
+
+#### AccessToken.authorizationScope
+
+- signature: `String`
+- default: `'authorization'`
+
+This is a special scope automatically managed by this library. An authorization
+code will be granted only if the user-agent making the request provides an
+access token with authorization scope. Authorization scope is never given out
+through the authorization code flow; it is only attached to access tokens
+obtained by other grant types, like `'client_credentials'`.
+
+See [authorization code discussion](#authorization-code)
+
+### AuthorizationCode
+
+This model
+
+
+## Authorization code
+
+The OAuth2 standard sort of leaves us hanging when it comes to the details
+of the resource owner authentication/authorization part of an authorization
+code request. And I [quote](http://tools.ietf.org/html/rfc6749#section-4.1.1):
+
+```
+...the authorization server authenticates the resource owner and obtains
+an authorization decision (by asking the resource owner or by
+establishing approval via other means).
+```
+
+Additionally, it appears to be written with a static-page web server in mind,
+given that the authorization endpoint must return HTTP redirects.
+
+If you are following modern practices in web development, your app probably has
+an api server, an html server (or single-page js app server), an Android app,
+an iOS app, etc.  When the standard says `...by asking the resource owner...`,
+one has to consider a myriad of user-agents. This cries out for a pure-data
+interface to the authorization code endpoint...
+
+This library implements an autogenous authorization code protocol that
+separates the presentation of resource owner authorization (the actual
+user-agent form filled out by the resource owner) from the underlying oauth2
+logic. As a result, your oauth2 server can live entirely on your api server,
+close to your data.
+
+Resource owner authentication/authorization proceeds roughly as
+follows, where the *data-client* is the client requesting an authorization
+code, and the *form-client* is the (trusted) client presenting the resource
+owner with an authorization form (a data-client can also be a form-client).
+
+1. A data-client sends a user to an authorization form or presents one
+   themselves (if they can be trusted with a username/password... unlikely).
+2. With the user's credentials, the form-client requests an
+   access token with `authorization` scope.
+3. The form-client obtains an authorization code with the access token
+   and delivers it to the data-client by redirecting the user.
+
+The form-client can hang on to the access token with `authorization` scope to
+make future authorizations run smoother (like auto-filling the username and
+not prompting for a password).
+
+Any malicious app can pose as a *form-client* (see
+[phishing attacks](http://tools.ietf.org/html/rfc6749#section-10.11)); the
+developer should educate its users to avoid all but the most trustworthy
+clients (which probably means sticking with *your* app's authorization form).
+
+### Narrative example
+
+The following is an example of how a web app might interface with the
+API-style authorization endpoints provided by this library.
+
+- A client redirects a user to your authorization form, say `GET /authorize`
+  on your *html server*.
+- `GET /authorize` looks for the user credentials in the form of a session
+  cookie.
+- If the cookie is present, the current access token for the user is
+  loaded from the session store.
+- `GET /authorize` forwards the request (and the access token) to, say,
+  `GET /api/authorize` on the *API server*, where OAuth2 is configured.
+- `GET /api/authorize` validates the request (checks `redirect_uri`
+  against `client_id` and so forth) and sends a JSON response indicating
+  success, failure, and where to direct the response (either to the user
+  or the initiating client).
+- `GET /api/authorize` also checks for an access token; if the token has
+  authorization scope, the resource owner for the token is returned in the
+  JSON response (this is an indication to the requester that the given
+  access token will allow the authorization when POST'd; keep reading).
+- `GET /authorize` receives word from `GET /api/authorize` and either redirects
+  the user back to the client with an error or sends an authorization form to
+  the user (possibly with an error msg telling the user a client is trying
+  to bamboozle them).
+- The authorization form can take two courses of action: it can send the
+  user's decision back to `POST /authorize`, or `POST /api/authorize` via
+  an AJAX request.
+- If authorization requires user authentication (i.e. the user is
+  not logged in), they can do so via AJAX to `POST /api/token` using
+  the `client_credentials` grant type. Alternatively, they can
+  `POST /authorize` with user credentials in the form, and the html
+  server will obtain an authorization access token behind the scenes
+  using the `client_credentials` grant type.
+- `POST /api/authorize` *requires* an access token with authorization scope.
+
+
+But wait, a client could work around the `/authorize` endpoint and do
+something nasty with user credentials at the `/api/authorize` endpoint.
+Not really, because the client can never see the access token held by
+the web app (and
+cannot obtain one unless they steal the user's credentials).
+The access token is held on the html server and possibly in the user's
+browser (in local storage, which is only accessible by javascript run
+on pages served by the html server).
+
+If a client gets a hold of an access token with authorization scope, it can
+bypass explicit user authorization by using only the `POST /api/authorize`
+endpoint. A client possessing an access token with authorization scope is
+tantamount to the client knowing a user's password.
+
+The client *could* request authorization scope from a user, though, through
+`GET /authorize`. Users should be informed that this is a very dangerous
+scope to authorize, because it enables the client to allow access to any
+other client.
+
+For this reason, OAuth2 (by default) allows authorization scope through only
+the `client_credentials` grant type, where the client *is* the resource
+owner.
+
+
 ## Example
 
-A simple and complete, in-memory example.
+The simplest flow is probably a token request using the
+`client_credentials` grant type, so this example handles only that case.
 
 ```js
 var OAuth2 = require('osh-oauth2');
-var hash = require('bcrypt').hashSync;
-var express = require('express');
+var bcrypt = require('bcrypt');
+var supertest = require('supertest');
 
-// In-memory persistence.
-var accessTokens = {};
-var refreshTokens = {};
-var users = {
-  'tony': {
-    username: 'tony',
-    password: 'hey',
-    password_hash: hash('hey', 8)
-  }
-};
-var clients = {
-  'g00gle': {
-    id: 'g00gle',
-    secret: '!evil',
-    secret_hash: hash('!evil', 8)
-  }
-};
-
-// The minimal configuration.
 var oauth2 = OAuth2({
-  saveAccessToken: function(req, res, next) {
-    accessTokens[req.accessToken.id] = req.accessToken;
-    next();
+  User: {
+    load: function(id, callback) {
+      callback(null, {
+        name: 'Homer'
+      });
+    }
   },
-  loadAccessToken: function(req, res, next) {
-    req.accessToken = accessTokens[req.accessToken.id];
-    next();
+
+  Client: {
+    load: function(id, callback) {
+      // There is only one client.
+      callback(null, {
+        secret_hash: bcrypt.hashSync('d0nutz', 10)
+      });
+    },
+    authenticate: function(secret, client, callback) {
+      bcrypt.compare(secret, client.secret_hash, callback);
+    },
+    allowGrant: ['client_credentials']
   },
-  saveRefreshToken: function(req, res, next) {
-    refreshTokens[req.refreshToken.id] = req.refreshToken;
-    next();
-  },
-  loadRefreshToken: function(req, res, next) {
-    req.refreshToken = refreshTokens[req.refreshToken.id];
-    next();
-  },
-  loadUser: function(req, res, next) {
-    req.user = users[req.user.username];
-    next();
-  },
-  loadClient: function(req, res, next) {
-    req.client = users[req.user.username];
-    next();
+
+  AccessToken: {
+    lifetime: 3600,
+    defaultScope: 'public',
+    revokeScope: false,
+    allowRefresh: false,
+    save: function(token, callback) {
+      callback(); // don't really save it.
+    }
   }
 });
 
-var app = express();
+var api = express();
 
-app.post(
-  '/oauth2/token',
-  oauth2.token('password')
+api.post(
+  '/token',
+  oauth2.token()
 );
 
-app.get(
-  '/user/:username',
-  oauth2.scope('account'),
-  function(req, res) {
-    res.send(users[req.params.username]);
-  }
-);
+var request = supertest(api);
 
-app.listen(3333);
+request.post('/token')
+.type('form')
+.auth('homer', 'd0nutz')
+.send({
+  grant_type: 'client_credentials',
+  scope: 'secrets'
+})
+.expect(200, /access_token/);
 ```
 
-## Documentation
+
+## Documentation (outdated)
 
 - [Configuration](#configuration)
 - [Methods](#methods)
-  - [generateTokenId()](oauth2generatetokenid)
+  - [generateToken()](oauth2generatetoken)
   - [token()](#oauth2prototypetoken)
   - [scope()](#oauth2prototypescope)
 - [Flows](#flows)
@@ -127,7 +450,7 @@ are:
 
 Non-middleware OAuth2 class/instance methods.
 
-#### OAuth2.generateTokenId
+#### OAuth2.generateToken
 
 This is used by the default implementations of [newAccessToken](#newaccesstoken)
 and [newRefreshToken](#newrefreshtoken).
@@ -140,6 +463,35 @@ Function(Function(Error err, String id)<> callback)<>
 
 Uses the [crypto](http://nodejs.org/api/crypto.html) library to SHA1 hash
 256 random bytes into a hexadecimal string.
+
+#### OAuth2.validateSecret
+
+This is set to
+[`bcrypt.compare`](https://github.com/ncb000gt/node.bcrypt.js#async-recommended)
+which has the signature,
+
+```
+Function(String secret, String hash, Function callback)
+```
+
+
+#### OAuth2.hashSecret
+
+Used in the signup/join and register client flows.
+
+This is set to
+[`bcrypt.hash`](https://github.com/ncb000gt/node.bcrypt.js#async-recommended),
+with the signature,
+
+```
+Function(String secret, Integer|String salt, Function callback)
+```
+
+Usage of this function by default middleware sets the salt with an Integer,
+which indicates the number of rounds bcrypt should use to auto-generate a
+salt. This integer can be changed on the OAuth2 options object, under
+`opts.bcryptRounds`.
+
 
 #### OAuth2.prototype.token
 
@@ -209,7 +561,7 @@ this library, "flow" means any ordered set of calls to recognized middleware
 (or named steps); for example, this includes the "flow" involved in authorizing
 a client access to a resource.
 
-#### Authorization flows
+#### FLOWS.AUTH
 
 These are flows behind the authorization endpoint.
 
@@ -223,20 +575,19 @@ The authorization process requires:
 - [validateAuthRequest](#validateauthrequest)
 - [branchAuthRequest](#branchauthrequest)
 
-##### Code authorization
+##### FLOWS.CODE_AUTH
 
-- [loadClient](#loadclient)
-- [validateRedirectUri](#validateredirecturi)
+{FLOWS.CODE_AUTH}
 
 Standard references:
 
 - http://tools.ietf.org/html/rfc6749#section-4.1
 
-##### Decision flow
+##### FLOWS.DECISION
 
 ##### Implicit authorization
 
-#### Token flows
+#### FLOWS.TOKEN
 
 These are the flows for requesting an access token.
 
@@ -247,36 +598,17 @@ therefore omitted from the individual token flow lists):
 2. [attachErrorHandler](#attacherrorhandler)
 3. [validateTokenRequest](#validatetokenrequest)
 
-##### Client token flow
+##### FLOWS.CLIENT_TOKEN
 
-- [validateClientTokenRequest](#validateclienttokenrequest)
-- [readClientCredentials](#readclientcredentials)
-- [userFromClient](#userfromclient)
-- [loadUser](#loaduser)
-- [authenticateUser](#authenticateuser)
-- [newAccessToken](#newaccesstoken)
-- [saveAccessToken](#saveaccesstoken)
-- [sendToken](#sendtoken)
+{FLOWS.CLIENT_TOKEN}
 
 Standard references:
 
 - http://tools.ietf.org/html/rfc6749#section-4.4
 
-##### Code token flow
+##### FLOWS.CODE_TOKEN
 
-- [validateCodeTokenRequest](#validatecodetokenrequest)
-- [readClientCredentials](#readclientcredentials)
-- [loadClient](#loadclient)
-- [authenticateClient](#authenticateclient)
-- [readAuthorizationCode](#readauthorizationcode)
-- [loadAuthorizationCode](#loadauthorizationcode)
-- [validateRedirectUri](#validateredirecturi)
-- [scopeFromCode](#scopefromcode)
-- [newAccessToken](#newaccesstoken)
-- [newRefreshToken](#newrefreshtoken)
-- [saveAccessToken](#saveaccesstoken)
-- [saveRefreshToken](#saverefreshtoken)
-- [sendToken](#sendtoken)
+{FLOWS.CODE_TOKEN}
 
 Standard references:
 
@@ -290,17 +622,13 @@ type](http://tools.ietf.org/html/rfc6749#section-4.3) is enabled when
 `'password'` is passed to [token()](#oauth2prototypetoken).
 
 - [validatePasswordTokenRequest](#validatepasswordtokenrequest)
-- [readClientCredentials](#readclientcredentials)
-- [loadClient](#loadclient)
+- [maybeLoadClient](#maybeloadclient)
 - [authenticateClient](#authenticateclient)
-- [allowClientPasswordToken](#allowclientpasswordtoken)
+- [allowPasswordToken](#allowpasswordtoken)
 - [readUserCredentials](#readusercredentials)
-- [loadUser](#loaduser)
-- [authenticateUser](#authenticateuser)
+- [maybeLoadUser](#maybeloaduser)
 - [newAccessToken](#newaccesstoken)
-- [newRefreshToken](#newrefreshtoken)
 - [saveAccessToken](#saveaccesstoken)
-- [saveRefreshToken](#saverefreshtoken)
 - [sendToken](#sendtoken)
 
 Standard references:
@@ -341,8 +669,7 @@ on some kind of persistent storage mechanism.
 
 #### init
 
-- [Token flows](#token-flows) [&#8594;](#validatetokenrequest)
-- [Authorization flows](#authorization-flows) [&#8594;](#validateauthrequest)
+- [Implicit authorization](#implicit-authorization) [&#8594;](#validateauthrequest)
 
 Initializes some OAuth2-specific properties on the request and response
 objects.
@@ -426,7 +753,7 @@ Standard references:
 
 #### validateAuthRequest
 
-- [&#8592;](#init) [Authorization flows](#authorization-flows) [&#8594;](#branchauthrequest)
+- [&#8592;](#init) [Implicit authorization](#implicit-authorization) [&#8594;](#readauthclientid)
 
 This middleware runs through the query parameters that are expected on an
 authorization GET request. These are:
@@ -448,8 +775,6 @@ Standard references
 
 #### branchAuthRequest
 
-- [&#8592;](#validateauthrequest) [Authorization flows](#authorization-flows) 
-
 | prev | flow | next |
 |------|------|------|
 | [validateAuthRequest](#validateauthrequest) | [Authorization flow](#authorization-flows) | &nbsp; |
@@ -468,8 +793,6 @@ subflow depending on its value.
 
 #### validateTokenRequest
 
-- [&#8592;](#init) [Token flows](#token-flows) [&#8594;](#branchtokenrequest)
-
 Validate various aspects of a token request. The default implementation
 checks that the request type is `application/x-www-form-urlencoded`, and
 that the `grant_type` parameter is present in the request body. If validation
@@ -486,20 +809,22 @@ Standard references:
 
 #### branchTokenRequest
 
-- [&#8592;](#validatetokenrequest) [Token flows](#token-flows) 
-
 Switches to one of the following flows depending on the `req.grant_type`
 found in [validateTokenRequest](#validatetokenrequest):
 
 - [Password token flow](#password-token-flow)
-- [Client token flow](#client-token-flow)
-- [Code token flow](#code-token-flow)
+- FLOWS.CLIENT_TOKEN
+- FLOWS.CODE_TOKEN
+
+#### loadAuthorizationCode
+
+Given `req.code` sent in the authorization code token request, load the
+following from persistent storage:
+
+- `req.scope`: The scope that was requested from the authorization endpoint.
+- `req.expires`: The expiration date of the authorization code.
 
 #### readClientCredentials
-
-- [&#8592;](#validatepasswordtokenrequest) [Password token flow](#password-token-flow) [&#8594;](#loadclient)
-- [&#8592;](#validateclienttokenrequest) [Client token flow](#client-token-flow) [&#8594;](#userfromclient)
-- [&#8592;](#validatecodetokenrequest) [Code token flow](#code-token-flow) [&#8594;](#loadclient)
 
 The result of this middleware should be the following properties attached
 to the request object.
@@ -520,17 +845,12 @@ Standard references:
 
 #### loadClient
 
-- [&#8592;](#readclientcredentials) [Password token flow](#password-token-flow) [&#8594;](#authenticateclient)
-- [&#8592;](#readclientcredentials) [Code token flow](#code-token-flow) [&#8594;](#authenticateclient)
-- [Code authorization](#code-authorization) [&#8594;](#validateredirecturi)
-
 Load client information from persistent storage and set it as the `req.client`
 object. The default implementation throws an Error.
 
 #### authenticateClient
 
-- [&#8592;](#loadclient) [Password token flow](#password-token-flow) [&#8594;](#allowclientpasswordtoken)
-- [&#8592;](#loadclient) [Code token flow](#code-token-flow) [&#8594;](#readauthorizationcode)
+- [&#8592;](#maybeloadclient) [Password token flow](#password-token-flow) [&#8594;](#allowpasswordtoken)
 
 Given client credentials from [readClientCredentials](#readclientcredentials)
 and client properties from [loadClient](#loadclient), authenticate the
@@ -547,8 +867,7 @@ on the `req.client` object:
 
 #### readUserCredentials
 
-- [&#8592;](#allowclientpasswordtoken) [Password token flow](#password-token-flow) [&#8594;](#loaduser)
-- [Decision flow](#decision-flow) [&#8594;](#loaduser)
+- [&#8592;](#allowpasswordtoken) [Password token flow](#password-token-flow) [&#8594;](#maybeloaduser)
 
 Read the resource owner (i.e. user) credentials from the request body and
 set them on the request object as:
@@ -562,20 +881,12 @@ Standard references:
 
 #### loadUser
 
-- [&#8592;](#readusercredentials) [Password token flow](#password-token-flow) [&#8594;](#authenticateuser)
-- [&#8592;](#userfromclient) [Client token flow](#client-token-flow) [&#8594;](#authenticateuser)
-- [&#8592;](#readusercredentials) [Decision flow](#decision-flow) [&#8594;](#authenticateuser)
-
 Flows: [password](#password-flow)
 
 Load user (resource owner) information from persistent storage and add it to
 the `req.user` object. The default implementation throws an Error.
 
 #### authenticateUser
-
-- [&#8592;](#loaduser) [Password token flow](#password-token-flow) [&#8594;](#newaccesstoken)
-- [&#8592;](#loaduser) [Client token flow](#client-token-flow) [&#8594;](#newaccesstoken)
-- [&#8592;](#loaduser) [Decision flow](#decision-flow) [&#8594;](#newauthorizationcode)
 
 Flows: [password](#password-flow)
 
@@ -609,22 +920,21 @@ Standard references:
 
 #### newAccessToken
 
-- [&#8592;](#authenticateuser) [Password token flow](#password-token-flow) [&#8594;](#newrefreshtoken)
-- [&#8592;](#authenticateuser) [Client token flow](#client-token-flow) [&#8594;](#saveaccesstoken)
-- [&#8592;](#scopefromcode) [Code token flow](#code-token-flow) [&#8594;](#newrefreshtoken)
+- [&#8592;](#maybeloaduser) [Password token flow](#password-token-flow) [&#8594;](#saveaccesstoken)
 
-This is called at the end of a successful access token request via any
-grant type (i.e. token flow) and should attach an `accessToken` object
-to the `res` middleware object. The default implementation uses the
-[generateTokenId](#oauth2generatetokenid) function to create the id
-and then uses the `req.oauth2.accessToken` configuration options to fill
-in the remaining properties, which should include:
+This is called at the end of a successful access token request via any grant
+type (i.e. token flow) and should attach a `token` object to `res` (the
+response object) with the following minimum set of properties:
 
-- `id {String}`: The token. See `access_token` in the standard.
-- `type {String}`: The token type; usually `'bearer'`. See `token_type`
-  in the standard. 
-- `expiresIn {Number}`: Number of seconds until access token expires.
-  See `expires_in` in the standard.
+- `access_token {String}`
+- `token_type {String}`
+- `expires_in {Integer}`
+- `refresh_token {String}`
+- `expires {Date}`
+
+The default implementation uses the [generateToken](#oauth2generatetoken)
+function to create `access_token` and then uses the `req.oauth2.opts`
+configuration options to fill in the remaining properties.
 
 Standard references:
 

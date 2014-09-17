@@ -45,22 +45,22 @@ var DefaultAuthorizationCode = merge(DefaultModel, {
 
 var DefaultClient = merge(DefaultModel, {
   name: 'Client',
-  grants: [],
-  generateId: function(callback) {
-    OAuth2.generateToken(callback);
-  },
+  secretHash: 'secret_hash',
   validateId: function(id) {
     return VSCHAR.test(id);
   },
   validateRedirectUri: implementModelMethod(
     'validateRedirectUri(uri, client)'
   ),
-  authenticate: function(secret, client, callback) {
-    OAuth2.validateSecret(secret, client.secret_hash, callback);
-  },
-  allowGrant: function(grant, client) {
-    return this.grants.indexOf(grant) > -1;
-  }
+  //authenticate: function(secret, client, callback) {
+    //OAuth2.validateSecret(secret, client[this.secretHash], callback);
+  //},
+  authenticate: implementModelMethod(
+    'authenticate(secret, client, callback)'
+  ),
+  allowGrant: implementModelMethod(
+    'allowGrant: Array<String>|Function(grant, client)<Boolean>'
+  )
 });
 
 var DefaultUser = merge(DefaultModel, {
@@ -73,11 +73,11 @@ var DefaultAccessToken = merge(DefaultModel, {
     OAuth2.generateToken(callback);
   },
   lifetime: implementModelMethod(
-    'lifetime: {String|Function(client, user, scope, callback)}'
+    'lifetime: String|Function(client, user, scope, callback)'
   ),
   authorizationScope: 'authorization',
   defaultScope: implementModelMethod(
-    'defaultScope: {String|Function(client, user, callback)}'
+    'defaultScope: String|Function(client, user, callback)'
   ),
   revokeScope: implementModelMethod(
     'revokeScope: String|Function(scope, client, user, callback)'
@@ -93,7 +93,7 @@ var DefaultRefreshToken = merge(DefaultModel, {
     OAuth2.generateToken(callback);
   },
   lifetime: implementModelMethod(
-    'lifetime: {String|Function(client, user, scope, callback)}'
+    'lifetime: String|Function(client, user, scope, callback)'
   )
 });
 
@@ -110,9 +110,17 @@ OAuth2 = Class(function(opts) {
     this.res = opts.res;
   });
 
+  var Client = merge(DefaultClient, opts.Client);
+  if (Array.isArray(Client.allowGrant)) {
+    var grants = Client.allowGrant;
+    Client.allowGrant = function(grant) {
+      return grants.indexOf(grant) >= 0;
+    };
+  }
+
   extend(this.OAuth2Request.prototype, opts, {
     User: merge(DefaultUser, opts.User),
-    Client: merge(DefaultClient, opts.Client),
+    Client: Client,
     AccessToken: merge(DefaultAccessToken, opts.AccessToken),
     RefreshToken: merge(DefaultRefreshToken, opts.RefreshToken),
     AuthorizationCode: merge(DefaultAuthorizationCode, opts.AuthorizationCode)
@@ -175,20 +183,8 @@ OAuth2.FLOWS = {
     'readAuthResponseType',
     'validateResponseType',
     'ok'
-  ],
-
-  /**
-   *  Steps required before the authorization of a resource request.  These
-   *  include parsing the access token from the request header, loading the
-   *  access token attributes (scope, resource owner, expires, ...) from the
-   *  database, and checking its expiration date.
-   */
-
-  SCOPE: [
-    'readAccessToken',
-    'maybeLoadAccessToken',
-    'checkAccessExpiration'
   ]
+
 };
 
 /**
@@ -196,11 +192,6 @@ OAuth2.FLOWS = {
  *  seconds.
  */
 
-OAuth2.expirationFromLifetime = function(now, lifetime) {
-  var expires = new Date(now);
-  expires.setSeconds(expires.getSeconds() + lifetime);
-  return expires;
-};
 
 extend(OAuth2, {
 
@@ -240,13 +231,10 @@ extend(OAuth2, {
     oauth2.scope = req.query.scope;
     oauth2.state = req.query.state;
 
-    log('Authorization request is valid.');
-
     next();
   },
 
   readAuthRedirectUri: function(req, res, next) {
-    log('Read redirect_uri');
     var oauth2 = req.oauth2;
     oauth2.redirect_uri = req.query.redirect_uri;
     if (!oauth2.redirect_uri) {
@@ -383,24 +371,12 @@ extend(OAuth2, {
    */
 
   readUserCredentials: function(req, res, next) {
-    log('Read user credentials');
     var oauth2 = req.oauth2;
     oauth2.username = req.body.username;
     oauth2.password = req.body.password;
     next();
   },
 
-  /**
-   *  Only occurs in client flow.
-   */
-
-  userFromClient: function(req, res, next) {
-    log('Set user credentials from client credentials');
-    var oauth2 = req.oauth2;
-    oauth2.username = oauth2.client_id;
-    oauth2.password = oauth2.client_secret;
-    next();
-  },
 
 
   checkRefreshToken: function(req, res, next) {
@@ -516,7 +492,13 @@ extend(OAuth2, {
     return 'string' == typeof scope ? scope : scope.join(' ');
   },
 
-  removeScope: removeScope
+  removeScope: removeScope,
+
+  expirationFromLifetime: function(now, lifetime) {
+    var expires = new Date(now);
+    expires.setSeconds(expires.getSeconds() + lifetime);
+    return expires;
+  }
 });
 
 
@@ -875,7 +857,6 @@ OAuth2.middleware = {
         });
       }
       req.oauth2.accessToken = accessToken;
-      log('loaded access token', accessToken);
       next(err);
     });
   },
@@ -883,6 +864,12 @@ OAuth2.middleware = {
   maybeReadAccessTokenUserId: function(req, res, next) {
     var accessToken = req.oauth2.accessToken;
     req.oauth2.userId = accessToken && accessToken.user_id;
+    next();
+  },
+
+  maybeReadAccessTokenClientId: function(req, res, next) {
+    var accessToken = req.oauth2.accessToken;
+    req.oauth2.clientId = accessToken && accessToken.client_id;
     next();
   },
 
@@ -972,8 +959,8 @@ OAuth2.middleware = {
         var code = oauth2.code = {
           id: id,
           scope: scope,
-          user_id: user.id,
-          client_id: client.id,
+          user_id: oauth2.userId,
+          client_id: oauth2.clientId,
           redirect_uri: oauth2.redirectUri
         };
 
@@ -1158,8 +1145,8 @@ OAuth2.middleware = {
         var token = oauth2.accessToken = {
           id: id,
           scope: scope,
-          user_id: user.id,
-          client_id: client.id
+          user_id: oauth2.userId,
+          client_id: oauth2.clientId
         };
 
         token.lifetime = (
@@ -1220,6 +1207,30 @@ OAuth2.middleware = {
   },
 
   /**
+   *  Check the access token scope against the current scope
+   *  set on req.oauth2.scope.
+   *
+   *  Requires
+   *
+   *    - req.oauth2.accessToken
+   *    - req.oauth2.scope
+   */
+
+  checkAccessTokenScope: function(req, res, next) {
+    var oauth2 = req.oauth2;
+    var tokenScope = OAuth2.scopeArray(oauth2.accessToken.scope);
+    var authorizedScope = OAuth2.scopeArray(oauth2.scope);
+    for (var i = 0; i < tokenScope.length; i++) {
+      if (authorizedScope.indexOf(tokenScope[i]) >= 0) {
+        return next();
+      }
+    }
+    res.status(401).send({
+      error: 'Access denied. Token needs scope "' + oauth2.scope + '"'
+    });
+  },
+
+  /**
    *  Requires
    *
    *    - req.oauth2.user
@@ -1257,8 +1268,8 @@ OAuth2.middleware = {
         var token = oauth2.refreshToken = {
           id: id,
           scope: accessToken.scope,
-          user_id: user.id,
-          client_id: client.id
+          user_id: oauth2.userId,
+          client_id: oauth2.clientId
         };
 
         token.lifetime = (
@@ -1314,7 +1325,10 @@ OAuth2.middleware = {
       body.refresh_token = refreshToken.id;
     }
 
-    res.status(200).send(body);
+    res.status(200)
+    .set('Cache-Control', 'no-store')
+    .set('Pragma', 'no-cache')
+    .send(body);
   },
 
   setUserIdFromClientId: function(req, res, next) {
@@ -1421,6 +1435,30 @@ OAuth2.middleware = {
       }
     }
     else next(err);
+  },
+
+  accessError: function(err, req, res, next) {
+    if (err instanceof OAuth2Error) {
+      var msg = {
+        error: err.code || 'invalid_request',
+        error_description: err.desc || '',
+        error_uri: err.uri || ''
+      };
+
+      if (err.code === 'server_error' && req.oauth2.debug) {
+        return next(err.error);
+      }
+
+      var status;
+      switch (err.code) {
+        case 'access_denied': status = 401; break;
+        case 'server_error': status = 500; break;
+        default: status = 400;
+      }
+
+      res.status(status).send(msg);
+    }
+    else next(err);
   }
 };
 
@@ -1497,7 +1535,6 @@ OAuth2.flows = {
     'requireAuthorizationCode',
     'checkCodeExpiration',
     'validateRedirectUriWithCode',
-    'setDefaultScope',
     'readCodeScope',
     'readCodeUserId',
     'maybeLoadUser',
@@ -1509,6 +1546,48 @@ OAuth2.flows = {
     'deleteAuthorizationCode',
     'sendToken',
     'tokenError'
+  ],
+
+  /**
+   *  Protect an API resource with scope.
+   *
+   *  Requires
+   *
+   *    - req.oauth2.scope
+   *
+   *  to be set in runner middleware setup by
+   *  OAuth2.prototype.scope.
+   */
+
+  allow: [
+    'init',
+    'maybeReadAccessTokenId',
+    'maybeLoadAccessToken',
+    'requireAccessToken',
+    'checkAccessTokenExpiration',
+    'checkAccessTokenScope',
+    'maybeReadAccessTokenUserId',
+    'maybeLoadUser',
+    'requireUser',
+    'maybeReadAccessTokenClientId',
+    'maybeLoadClient',
+    'requireClient',
+    'accessError'
+  ],
+
+  /**
+   *  Read an access token, and load user and client if
+   *  found. Does not error if none found.
+   */
+
+  load: [
+    'init',
+    'maybeReadAccessTokenId',
+    'maybeLoadAccessToken',
+    'maybeReadAccessTokenClientId',
+    'maybeLoadClient',
+    'maybeReadAccessTokenUserId',
+    'maybeLoadUser'
   ]
 
 };
@@ -1576,23 +1655,46 @@ OAuth2.prototype.token = function(flows) {
  *  resource.
  */
 
-OAuth2.prototype.scope = function(scope) {
-  return [attachScope].concat(this.flow('SCOPE'));
 
-  function attachScope(req, res, next) {
-    res.scope = scope;
-    next();
+OAuth2.prototype.allow = function(scope) {
+  if (!scope || !OAuth2.scopeArray(scope).length) {
+    throw new Error(
+      'oauth2.allow() needs a scope. If you just want to load a ' +
+      '(possibly existing) access token + user and client models, ' +
+      'use oauth2.load() instead.'
+    );
   }
+  scope = OAuth2.scopeString(scope);
+
+  var OAuth2Request = this.OAuth2Request;
+  var flow = this.flows.allow;
+
+  return function(req, res, next) {
+    req.oauth2 = OAuth2Request(req, res);
+    req.oauth2.scope = scope;
+    OAuth2.runFlow(flow, req, res, next);
+  };
+};
+
+
+OAuth2.prototype.load = function() {
+  var OAuth2Request = this.OAuth2Request;
+  var flow = this.flows.load;
+
+  return function(req, res, next) {
+    req.oauth2 = OAuth2Request(req, res);
+    OAuth2.runFlow(flow, req, res, next);
+  };
 };
 
 
 OAuth2.prototype.authorize = function() {
-
   var OAuth2Request = this.OAuth2Request;
   var flows = this.flows;
+  var debug = this.opts.debug;
 
   return function(req, res, next) {
-    log('~~≈≈ Authorization code ≈≈~~');
+    debug && log('~~≈≈ Authorization code ≈≈~~');
     req.oauth2 = OAuth2Request(req, res);
     req.oauth2.flows = {
       request: flows.codeRequest,
@@ -1601,7 +1703,6 @@ OAuth2.prototype.authorize = function() {
     OAuth2.runFlow(flows.code, req, res, next);
   };
 };
-
 
 module.exports = OAuth2;
 
@@ -1656,6 +1757,14 @@ function Flow(actions, _debug) {
   return flow;
 }
 
+/**
+ *  Runs an array of express-like middleware functions just like
+ *  express does but adds the ability to pass an array of middleware
+ *  functions to next() within each middleware function. This allows
+ *  branching within an express request based on attributes other than
+ *  the url pathname.
+ */
+
 function runFlow(flow, req, res, done) {
   (function run(pos, err) {
     if (Array.isArray(err)) runFlow(err, req, res, done);
@@ -1664,7 +1773,7 @@ function runFlow(flow, req, res, done) {
       var fn = flow[pos];
       var next = run.bind(null, pos + 1);
       if (err && fn.length === 4) fn(err, req, res, next);
-      else if (!err) fn(req, res, next);
+      else if (!err && fn.length === 3) fn(req, res, next);
       else next(err); // skip the middleware
     }
   })(0);
