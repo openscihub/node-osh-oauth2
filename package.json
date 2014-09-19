@@ -1,6 +1,6 @@
 {
   "name": "osh-oauth2",
-  "version": "0.0.0",
+  "version": "0.0.1",
   "description": "openscihub.org: oauth2 server helper for node.js",
   "main": "index.js",
   "directories": {
