@@ -10,6 +10,7 @@ high-level, yet detailed, model abstraction described in
 - [Example](#example)
 - [Usage](#usage)
 - [Configuration](#configuration)
+- [Access token flow](#access-token-flow)
 - [Authorization code flow](#authorization-code-flow)
 - [License](#license)
 
@@ -718,6 +719,24 @@ AuthorizationCode.lifetime = function(accessToken, client, user) {
   );
 };
 ```
+
+## Access token flow
+
+This library allows client authentication of two types in requests to the token
+endpoint.
+
+1. Basic HTTP authentication
+2. Access token authentication
+
+The first is covered by the standard
+(http://tools.ietf.org/html/rfc6749#section-2.3.1). With the second option,
+user-clients (clients that are requesting their own resources) can upgrade
+their access token scope without re-entering their password information.
+
+The second option requires an access token with [authorization
+scope](#accesstokenauthorizationscope) in the request.  As mentioned above,
+such an access token is only available to user-clients authenticating with
+username/password.
 
 
 ## Authorization code flow

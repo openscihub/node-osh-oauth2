@@ -244,6 +244,48 @@ describe('osh-oauth2', function() {
     });
   });
 
+  describe('token()', function() {
+    it('should accept access token authentication', function(done) {
+      var token;
+      var request = TestOAuth2({
+        User: User,
+        Client: merge(Client, {
+          allowGrant: ['client_credentials']
+        }),
+        AccessToken: merge(AccessToken, {
+          defaultScope: 'public',
+          revokeScope: false
+        })
+      });
+
+      // First request gets an authorization token (i.e. logs in).
+      request.post('/token')
+      .type('form')
+      .auth('tony', 'hey')
+      .send({
+        grant_type: 'client_credentials',
+        scope: 'authorization'
+      })
+      .expect(200)
+      .expect(/"scope":"authorization"/)
+      .end(function(err, res) {
+        if (err) done(err);
+        else {
+          // Second request uses authorization token as authentication.
+          request.post('/token')
+          .type('form')
+          .set('x-access-token', res.body.access_token)
+          .send({
+            grant_type: 'client_credentials',
+            scope: 'authorization secrets'
+          })
+          .expect(200)
+          .expect(/"scope":"authorization secrets"/, done);
+        }
+      });
+    });
+  });
+
   describe('allow()', function() {
     var request;
     var token;

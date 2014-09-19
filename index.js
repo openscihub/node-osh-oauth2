@@ -331,7 +331,14 @@ OAuth2.flows = {
     'init',
     'parseForm',
     'validateTokenRequest',
-    'requireBasicClientCredentials',
+
+    // Gather approved client credentials.
+    'maybeReadBasicClientCredentials',
+    'maybeReadAccessTokenId',
+    'maybeLoadAccessToken',
+    'maybeReadAccessTokenClientId',
+
+    //'requireBasicClientCredentials',
     'maybeLoadClient',
     'requireClient',
     'authenticateClient',
@@ -545,6 +552,16 @@ OAuth2.middleware = {
     next(err);
   },
 
+  maybeReadBasicClientCredentials: function(req, res, next) {
+    var oauth2 = req.oauth2;
+    var creds = auth(req);
+    if (creds) {
+      oauth2.clientId = creds.name;
+      oauth2.clientSecret = creds.pass;
+    }
+    next();
+  },
+
   requireAndValidateClientId: function(req, res, next) {
     var err;
     var id = req.oauth2.clientId;
@@ -637,6 +654,11 @@ OAuth2.middleware = {
   },
 
   /**
+   *  Used on the token endpoint. If clientId and clientSecret exist,
+   *  use password authentication; otherwise, if an access token exists,
+   *  check it for authorization scope.
+   *
+   *
    *  Expects
    *
    *    - req.oauth2.clientId
@@ -645,14 +667,33 @@ OAuth2.middleware = {
    */
 
   authenticateClient: function(req, res, next) {
+    var err;
     var oauth2 = req.oauth2;
-    log('Authenticate client', oauth2.clientId);
     var client = oauth2.client;
+    var accessToken = oauth2.accessToken;
     if (!client) {
-      var err = OAuth2Error({
+      err = OAuth2Error({
         code: 'invalid_client',
         desc: 'No client to authenticate? No token for you!'
       });
+      next(err);
+    }
+    else if (accessToken) {
+      var authorizationScope = oauth2.AccessToken.authorizationScope;
+      var tokenScope = accessToken.scope;
+      if (oauth2.clientSecret) {
+        // Credentials also supplied in Basic Auth HTTP
+        err = OAuth2Error({
+          code: 'invalid_client',
+          desc: 'Multiple client credentials in request'
+        });
+      }
+      else if (!OAuth2.hasScope(tokenScope, authorizationScope)) {
+        err = OAuth2Error({
+          code: 'invalid_client',
+          desc: 'Access token client authentication failed'
+        });
+      }
       next(err);
     }
     else {
@@ -801,13 +842,19 @@ OAuth2.middleware = {
 
   maybeReadAccessTokenUserId: function(req, res, next) {
     var accessToken = req.oauth2.accessToken;
-    req.oauth2.userId = accessToken && accessToken.user_id;
+    var userId = accessToken && accessToken.user_id;
+    if (userId) {
+      req.oauth2.userId = userId;
+    }
     next();
   },
 
   maybeReadAccessTokenClientId: function(req, res, next) {
     var accessToken = req.oauth2.accessToken;
-    req.oauth2.clientId = accessToken && accessToken.client_id;
+    var clientId = accessToken && accessToken.client_id;
+    if (clientId) {
+      req.oauth2.clientId = clientId;
+    }
     next();
   },
 
